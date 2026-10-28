@@ -66,3 +66,19 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Generated experiment artifacts and private cluster records
+results/raw/*
+!results/raw/.gitkeep
+results/processed/*
+!results/processed/.gitkeep
+figures/*
+!figures/.gitkeep
+private/
+.env
+.env.*
+*.pem
+*.key
+
+# Scheduler output
+slurm-*.out
