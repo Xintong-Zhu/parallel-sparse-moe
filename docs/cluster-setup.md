@@ -51,4 +51,38 @@ prove that the account may submit jobs.
 
 The next step is a compute-node launch test: 2 MPI ranks x 1 thread, 2 ranks x
 2 threads, then one MPI run spanning two nodes. Those tests are not included in
-this setup script.
+the environment-inventory script.
+
+## Step 2 launch probe
+
+After confirming the correct module commands on the selected system, configure
+the small probe program:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target moe_launch_probe
+```
+
+Run it only through an approved interactive allocation or batch job. The
+following are command shapes, not scheduler instructions:
+
+```bash
+# 2 ranks x 1 OpenMP thread
+OMP_NUM_THREADS=1 scripts/run_launch_probe.sh -- <cluster-launcher> \
+  build/moe_launch_probe --expect-threads 1
+
+# 2 ranks x 2 OpenMP threads
+OMP_NUM_THREADS=2 scripts/run_launch_probe.sh -- <cluster-launcher> \
+  build/moe_launch_probe --expect-threads 2
+
+# A run explicitly allocated on two nodes
+OMP_NUM_THREADS=1 scripts/run_launch_probe.sh -- <cluster-launcher> \
+  build/moe_launch_probe --expect-threads 1 --require-distinct-hosts
+```
+
+Replace `<cluster-launcher>` with the complete launcher command prescribed by
+the cluster documentation, including its rank and node arguments. The probe
+verifies MPI's `MPI_THREAD_FUNNELED` support, reports each rank's hostname and
+OpenMP thread count, and uses a ring `MPI_Sendrecv` check. It fails if the
+requested thread count is not observed or if the two-node check observes only
+one hostname.
