@@ -1,351 +1,455 @@
 # Parallel Sparse Mixture-of-Experts Inference
 
-This project studies the parallelization of a sparse Mixture-of-Experts (MoE)
-inference layer using MPI for distributed-memory communication and OpenMP for
-shared-memory computation.
+This project studies a single-layer Top-2 sparse Mixture-of-Experts (MoE)
+forward pass using C++, MPI, and OpenMP. The main subject is Expert Parallelism
+(EP): tokens are dispatched to the MPI ranks that own their selected experts,
+processed there, and returned to their source ranks. A replicated Data
+Parallel (DP) implementation provides a communication-free reference.
 
-> **Project status:** experimental design, version 0.1. The definitions marked
-> **fixed** below are the shared contract for all implementations. Numerical
-> values marked **pilot** are starting points and must be calibrated on Atlas or
-> Vanda before the final benchmark campaign.
+> **Project status:** design and implementation, protocol version 0.2.
+> This README is the team's frozen experimental contract and supersedes the
+> earlier pilot parameters and routing definitions in version 0.1. Calibration
+> choices may change only before the formal experiment matrix is frozen.
 
-## Research question
+## Scope and research questions
 
-How do routing skew, communication strategy, and the MPI/OpenMP process layout
-affect load balance, strong/weak scaling, and parallel efficiency in distributed
-sparse MoE inference?
+The project implements one MoE inference layer, not a complete language model
+and not model training. It does not implement hot-expert splitting, expert
+replication within EP, or dynamic expert migration.
 
-The project focuses on one MoE inference layer rather than a complete
-Transformer or model-training pipeline. This keeps the study focused on token
-routing, inter-process communication, expert computation, and straggler effects.
+The study asks:
 
-## Algorithm definition (fixed)
+1. What communication and load-imbalance costs does EP introduce relative to a
+   replicated DP baseline?
+2. How do `MPI_Alltoallv` and batched nonblocking point-to-point communication
+   compare under the same input, placement, and data volume?
+3. When does load-aware expert placement improve over round-robin placement?
+4. How do different MPI-rank/OpenMP-thread splits affect performance?
+5. How do controlled routing distributions affect scaling and efficiency?
 
-The input is a matrix of token embeddings
+The project does **not** assume that EP will beat DP at the selected teaching
+scale. Instead, it quantifies the cost of EP and explains when EP becomes
+necessary because model weights can no longer be replicated on every rank.
 
-```text
-X: [T, d_model]
-```
+## Symbols
 
-For every token, a Top-2 router selects two distinct experts. Each expert is a
-two-layer feed-forward network:
+| Symbol | Meaning |
+|---|---|
+| `N` | Global number of input tokens |
+| `d` | Token/model dimension |
+| `h` | Expert hidden dimension |
+| `E` | Number of experts |
+| `k` | Experts selected per token (`k = 2`) |
+| `P` | Number of MPI ranks |
+| `T_omp` | OpenMP threads per rank |
 
-```text
-Expert_e(x) = W2_e * ReLU(W1_e * x + b1_e) + b2_e
-```
+Each token selects two distinct experts, so every forward pass contains exactly
+`2N` token-expert assignments.
 
-where the default hidden dimension is
+## Frozen algorithm definition
 
-```text
-d_hidden = 4 * d_model
-```
-
-If the selected experts are `e1` and `e2`, the two routing weights are
-normalized so that `g1 + g2 = 1`, and the output is
-
-```text
-y = g1 * Expert_e1(x) + g2 * Expert_e2(x)
-```
-
-The baseline uses FP32 values and ReLU. The correctness baseline does not drop
-tokens and does not impose an expert-capacity limit. Capacity-limited or padded
-routing may be added later as a separately labelled optimization.
-
-## Distributed execution model (fixed)
-
-1. Global input tokens are divided approximately evenly among MPI ranks.
-2. Every rank routes its own local tokens. Routing is not centralized on rank 0.
-3. Experts are assigned statically with round-robin ownership:
-   `owner(expert_id) = expert_id % world_size`.
-4. Each token is packed once for each of its two selected experts.
-5. An `MPI_Alltoallv` dispatches token/expert assignments to the owning ranks.
-6. Each rank evaluates its local expert subset. The hybrid version uses OpenMP
-   inside the rank.
-7. A second `MPI_Alltoallv` returns expert outputs to the tokens' original ranks.
-8. Original ranks restore token order and perform the weighted Top-2 combine.
-
-A rank may own multiple experts. “One rank equals one expert” is not assumed.
-The return operation is an all-to-all exchange, not a gather to rank 0.
-
-## Implementations to compare (fixed minimum)
-
-| Name | MPI | OpenMP | Purpose |
-|---|---:|---:|---|
-| `serial` | No | No | Correctness and algorithmic speedup reference |
-| `mpi` | Yes | No | Distributed communication baseline |
-| `mpi_omp` | Yes | Yes | Hybrid distributed/shared-memory implementation |
-
-At least one additional design comparison should be selected after the baseline
-is working. Candidates include OpenMP static versus dynamic scheduling,
-blocking versus nonblocking communication, communication/computation overlap,
-or a load-aware expert-placement strategy. These are not yet fixed.
-
-## Parameter policy
-
-### Fixed parameters
-
-| Parameter | Value |
+| Parameter | Frozen value |
 |---|---:|
-| Precision | FP32 |
-| Top-k | 2 |
+| Experts `E` | 16 |
+| Model dimension `d` | 128 |
+| Hidden dimension `h` | 256 |
+| Top-k | 2, without replacement |
 | Activation | ReLU |
-| Hidden ratio | `d_hidden = 4 * d_model` |
-| Default expert placement | Round-robin |
-| Default token ownership | Even block distribution by global token ID |
+| Numeric type | `float` / FP32 |
+| Token dropping | None |
+| Expert biases | Zero |
 
-### Pilot configuration
-
-The following is an initial calibration workload, not a final benchmark claim:
+For expert `e`,
 
 ```text
-tokens       = 65,536
-experts      = 32
-d_model      = 256
-d_hidden     = 1,024
-top_k        = 2
-precision    = FP32
-seed         = 5,208
+Expert_e(x) = W2_e * ReLU(W1_e * x)
 ```
 
-Under perfectly balanced routing, this gives an average of 4,096 token-expert
-assignments per expert. It should be large enough for meaningful batching, but
-its runtime and memory use must be measured on the target machine.
-
-Candidate problem-size sweeps are:
+with deterministic initialization
 
 ```text
-tokens:       2^14, 2^16, 2^18
-d_model:      128, 256, 512
-d_hidden:     4 * d_model
+W1_e ~ Normal(0, 1/d)
+W2_e ~ Normal(0, 1/h)
 ```
 
-These candidates represent relatively communication-heavy, balanced, and
-compute-heavy workloads. The final subset will be selected after a pilot run.
-The selected main workload should:
-
-- take long enough that timer and MPI-startup noise do not dominate;
-- remain short enough to repeat reliably;
-- provide at least tens to hundreds of assignments per active expert;
-- remain below roughly half of the available node memory; and
-- keep the same global problem and model when measuring strong scaling.
-
-The main expert count must be at least the largest tested MPI process count.
-Primary scaling configurations should preferably use process counts that divide
-the expert count. Non-divisible cases belong in correctness and robustness tests.
-
-## Data and reproducibility contract (fixed)
-
-The primary experiments use synthetic data. No external text dataset or
-pretrained model is required. Synthetic data is appropriate because the study
-concerns communication and load balance, and it allows routing skew to be
-controlled independently of an external model.
-
-Input embeddings, router data, routing decisions, gate weights, and expert
-weights must be deterministic. They are defined by global indices rather than
-by MPI rank or random-number call order. Conceptually:
+For a token whose selected experts are `e0` and `e1`, the two selected router
+scores are converted to weights with a numerically stable softmax. The output is
 
 ```text
-X[token_id, dimension]       = f(seed, token_id, dimension)
-W[expert_id, row, column]    = f(seed, expert_id, row, column)
+y = a0 * Expert_e0(x) + a1 * Expert_e1(x)
 ```
 
-The implementation should use a stateless indexed generator or hash (for
-example, SplitMix64 followed by a deterministic conversion to FP32). It must
-not use `seed + rank` as the only randomization rule. Consequently:
+The following conventions are fixed:
 
-- changing the number of MPI ranks does not change the global strong-scaling
-  workload;
-- serial and parallel implementations receive identical logical inputs;
-- different team members and cluster runs can reproduce the same case; and
-- large input and weight files do not need to be copied between systems.
+- score ties are broken in favour of the smaller expert ID;
+- partial outputs are stored as slot 0 and slot 1;
+- the final expression is evaluated in the fixed order
+  `y = a0 * o0 + a1 * o1`;
+- expert weights and token values do not change with `P` or `T_omp`; and
+- formal comparisons use `-O3 -fno-fast-math -ffp-contract=off`.
 
-The global seed for the baseline is `5208`. Any additional seeds must be listed
-explicitly in benchmark output.
+With the frozen dimensions, one expert's two matrices occupy approximately
+256 KiB and all 16 experts occupy approximately 4 MiB in FP32. Full replication
+is therefore practical in this experiment and motivates the DP reference line.
 
-## Routing workloads
+## Implementations
 
-Routing distribution is a primary experimental variable. At minimum, the study
-will contain:
-
-| Mode | Definition | Purpose |
+| Name/interface | Description | Purpose |
 |---|---|---|
-| `balanced` | Exactly equal expert assignment counts where possible | Ideal load-balance reference |
-| `uniform` | Deterministic uniform-random expert selection | Natural sampling variation |
-| `zipf` | Expert probability proportional to `(expert_id + 1)^(-alpha)` | Controlled routing skew |
+| `naive_ref` | One assignment at a time, double-precision accumulation, independent code path | Correctness oracle only |
+| `serial` | Serial implementation using the shared production kernel | Speedup denominator |
+| `--parallelism dp` | Every rank generates all experts and processes only its local tokens | Replicated, communication-free reference |
+| `--parallelism ep` | Every rank stores only its assigned experts; tokens require dispatch and return | Main research implementation |
 
-Candidate Zipf exponents are:
+Both DP and EP support OpenMP. MPI is initialized with
+`MPI_Init_thread(..., MPI_THREAD_FUNNELED, ...)`; the provided level is checked,
+and MPI calls occur only on the main thread outside OpenMP parallel regions.
+
+## EP execution model
+
+1. Tokens are distributed as contiguous global-ID ranges across MPI ranks, with
+   remainders assigned to the first ranks.
+2. Each local token produces two assignments.
+3. Assignments are packed by destination rank.
+4. Counts are exchanged, followed by assignment payloads.
+5. Receivers stably group assignments by local expert.
+6. Local expert tasks execute through the shared production kernel.
+7. Results are restored to arrival order and returned to source ranks.
+8. Source ranks restore `[token][slot][d]` and combine slot 0 then slot 1.
+
+The baseline placement is round-robin:
 
 ```text
-alpha = 0.0, 0.5, 1.0, 1.5
+owner(expert_id) = expert_id % P
 ```
 
-Top-2 selections must contain two distinct experts. Gate weights must be
-deterministically generated and normalized. The exact-balanced mode may use
-fixed weights such as `0.6` and `0.4` for an easily checked baseline.
+The return is an all-to-all exchange, not a gather to rank 0.
 
-Every run must report the realized distribution, not only the requested
-distribution parameter. Required load statistics are:
+## Deterministic synthetic data
 
-- assignments per expert and per rank;
-- maximum load divided by mean load;
-- standard deviation or coefficient of variation; and
-- the identity and load of the slowest rank.
+The project uses synthetic data rather than a real text dataset. No large input
+or weight file is required.
 
-Two routing paths may be supported and must be labelled separately:
+- Tokens are functions of global token IDs.
+- Expert weights are functions of expert IDs.
+- A counter-based generator is used, for example SplitMix64 followed by a
+  deterministic Box-Muller transform where normal values are required.
+- Model, input, routing, and calibration use separate recorded seeds.
+- Every rank generates only the data it needs; DP ranks generate all experts.
+- The same case produces identical logical inputs, weights, and routes for
+  every process/thread configuration.
 
-1. **End-to-end routing:** compute router logits and select Top-2 experts.
-2. **Controlled routing:** generate Top-2 expert IDs from a specified
-   distribution to isolate communication and load-balancing behaviour.
+Do not define the global workload with `seed + rank`. Generation parameters and
+seeds are saved with every result.
 
-Results from these modes must not be mixed without clearly identifying the
-mode. Controlled routing is the primary mode for skew experiments; end-to-end
-routing demonstrates a complete MoE-layer execution path.
+## Routing modes
 
-## Correctness requirements
+### Router mode
 
-All parallel outputs must be compared with the true serial implementation using
-the same global input, weights, routing decisions, and gate weights.
+Router scores are computed and Top-2 experts are selected. No artificial skew
+is injected. The resulting expert histogram and rank `max/mean` load are
+recorded and must not be described as uniform unless the measurements show it.
 
-Required numerical checks are:
+### Controlled trace mode
 
-- maximum absolute error;
-- maximum relative error; and
-- root-mean-square error (RMSE).
+Trace mode controls expert-assignment shares independently of a learned router.
+Let `s_e` be expert `e`'s share of all `2N` assignments. Then
 
-An initial FP32 tolerance of `1e-4` may be used for development, but the final
-tolerance must be justified from the observed accumulation error.
+```text
+sum_e(s_e) = 1
+q_e = 2 * s_e
+```
 
-Required structural checks are:
+where `q_e` is the fraction of tokens selecting expert `e`. Because a token
+cannot select the same expert twice, `s_e <= 0.5`.
 
-- every token is assigned to exactly two distinct experts;
-- every dispatched token-expert assignment is returned exactly once;
-- every token receives exactly two expert outputs;
-- global token IDs and original order are restored correctly; and
-- serial and parallel output checksums agree within the numerical tolerance.
+| Workload/layout | Target assignment shares | Hot expert IDs |
+|---|---|---|
+| `uniform` | 6.25% for each of 16 experts | None |
+| `moderate-A` | Four hot experts at 15% each; other 12 at about 3.33% each | `{0,4,8,12}` |
+| `moderate-B` | Same shares as moderate-A | `{0,1,2,3}` |
+| `moderate-R1/R2/R3` | Same shares as moderate-A | Three fixed-seed random four-expert sets |
+| `extreme` | Expert 0 at 40%; every other expert at 4% | `{0}` |
 
-Correctness tests must include one rank, multiple ranks, token and expert counts
-that are not divisible by the rank count, highly skewed routing, two experts on
+The two experts for each token are sampled without replacement from calibrated
+weights using `hash(routing_seed, global_token_id)`. Sampling weights are
+calibrated offline and stored in configuration files; calibration is never part
+of a timed run.
+
+The realized share of each expert must be within:
+
+- 1 percentage point of the target for `N >= 8192`; and
+- 2 percentage points for `N = 2048`.
+
+Every `(workload, layout, N, seed)` records its realized histogram. Analysis uses
+the realized histogram rather than assuming exact target shares.
+
+Trace gate weights are deterministic:
+
+```text
+a0 ~ Uniform(0.5, 1.0)
+a1 = 1 - a0
+```
+
+Slot 0 is the larger weight. Calibration and test runs use the same calibrated
+sampling weights but different seeds.
+
+The command-line interface includes:
+
+```text
+--parallelism ep|dp
+--router-mode router|trace
+--skew uniform|moderate|extreme
+--hot-layout A|B|R1|R2|R3
+```
+
+## Placement strategies and expected load
+
+Two fixed expert-placement methods are compared:
+
+- **RR:** round-robin `expert_id % P`;
+- **LA:** a calibration histogram followed by deterministic LPT greedy
+  assignment. Calibration and mapping costs are reported separately.
+
+The table gives constructed `max rank load / mean rank load`. `Lower` is the
+unavoidable bound when experts cannot be split.
+
+| Workload | `P=4`: RR / LA / Lower | `P=8`: RR / LA / Lower |
+|---|---:|---:|
+| moderate-A | 2.40 / 1.00 / 1.00 | 2.40 / 1.20 / 1.20 |
+| moderate-B | 1.00 / 1.00 / 1.00 | 1.47 / 1.20 / 1.20 |
+| extreme | 2.08 / 1.60 / 1.60 | 3.52 / 3.20 / 3.20 |
+
+Measured loads must agree with this construction before performance results are
+accepted. Runs record predicted and actual rank load, prediction error, actual
+`max/mean`, remote-assignment ratio, and remote bytes.
+
+## Shared production kernel
+
+Serial, DP, and EP use the same production kernel:
+
+```cpp
+expert_forward(const ExpertWeights& w,
+               const float* X, // [m][d]
+               int m,
+               float* Y,       // [m][d]
+               float* scratch);
+```
+
+The fixed layout is row-major `W1[d][h]` and `W2[h][d]`. Assignments are grouped
+with a stable counting sort. Each expert list is cut into tasks containing at
+most `B` tokens, and every task calls `expert_forward`. Partial outputs are then
+restored to `[token][slot][d]` before the fixed-order combine.
+
+The kernel processes `MB` tokens together so that a loaded weight row serves
+multiple tokens. Calibration candidates are:
+
+```text
+MB in {4, 8}
+B  in {32, 64, 128}
+```
+
+A single-core compute-node microbenchmark records GFLOP/s and compares against
+one-assignment-at-a-time GEMV. The selected `(MB, B)` is then frozen. External
+BLAS is not used so that production implementations and OpenMP behaviour remain
+controlled.
+
+OpenMP flattens all `(expert, token block)` tasks into one array. Each thread
+has private scratch storage and each task writes a disjoint output region. The
+first version uses `schedule(static)`; skew experiments add
+`schedule(dynamic)`. Scratch buffers are first-touched inside the OpenMP region.
+
+## Communication strategies
+
+EP compares identical packed messages using:
+
+1. `MPI_Alltoall` for counts followed by `MPI_Alltoallv` for payloads; and
+2. batched P2P: exchange counts, post all `MPI_Irecv`/`MPI_Isend`, then
+   `MPI_Waitall`.
+
+Dispatch and return use distinct message tags. Before adding the expert kernel,
+a communication-loopback test returns assignments unchanged and verifies every
+ID, slot, and vector. Communication/computation overlap is optional and must be
+labelled separately.
+
+## Correctness gates
+
+| Level | Comparison | Passing rule |
+|---|---|---|
+| L0 | Hand-computable micro cases | Relative error `<= 1e-6` |
+| L1 | `serial` vs double-accumulation `naive_ref` | Elementwise `abs(delta) <= 1e-4 + 1e-4*abs(ref)` and relative L2 `<= 1e-5` |
+| L2 | `serial` vs all Trace DP/EP process/thread/communication/placement variants | Bitwise equality (`memcmp`) |
+| L3 | Router mode across implementations | Top-2 IDs and routing weights are bitwise identical before output comparison |
+| L4 | `serial` vs `naive_ref` routing | Any differing token must have second/third score gap `< 1e-4`; report and exclude it from L1 output comparison |
+
+L1 thresholds are initial values. First observed errors are recorded; a
+threshold may change only with a written numerical justification.
+
+Required invariants are:
+
+- total assignments equal `2N`;
+- expert execution counts equal the realized trace histogram;
+- each token receives both slots exactly once;
+- no assignment is lost, duplicated, or run by the wrong expert;
+- no output contains NaN or Inf; and
+- repeated forward calls do not retain stale output or counters.
+
+Bitwise L2 comparison depends on the shared kernel, fixed per-output accumulation
+order, disabled fast-math/FMA contraction, and fixed slot-combine order. Failures
+must be diagnosed before relaxing the requirement.
+
+For `N <= 8192`, validation compares complete outputs. For larger cases, each
+token output receives a 64-bit hash and an order-independent unsigned 64-bit
+`MPI_Allreduce` sum is compared with serial.
+
+The micro test uses `N=7, d=4, h=8, E=4, k=2` and includes a hand-computable
+FFN, a tied-router case, and a fixed two-output combine. Communication tests also
+cover `N < P`, non-divisible token counts, zero sends/receives, two experts on
 the same rank, and two experts on different ranks.
 
-Large performance runs may use checksums and sampled element comparisons after
-full element-by-element equivalence has been established on smaller cases.
+## Timing and result contract
 
-## Scaling definitions (fixed)
+Input/weight generation, calibration, file I/O, allocation, and one-time setup
+are outside the primary timed region. Grouping, packing, communication, expert
+computation, return, unpacking, and combine are included. Router mode labels
+whether router computation is included.
 
-### Strong scaling
+- Synchronize before the end-to-end measurement.
+- Record elapsed time on every rank and reduce the maximum outside the timed
+  region.
+- Retain phase diagnostics, but do not sum independent phase maxima and call the
+  result end-to-end time.
+- Warm up before at least five measured repetitions.
+- Interleave variants in the same job where possible.
+- Run comparable variants on the same allocated nodes.
+- Record single-node and cross-node results separately.
+- A result enters a performance figure only when `bitwise_ok = true`.
 
-Keep the global token count, number of experts, dimensions, seed, routing mode,
-and all weights fixed while increasing the number of MPI ranks and/or OpenMP
-threads.
-
-### Weak scaling
-
-Keep the number of input tokens per MPI rank fixed while increasing the rank
-count. Keep the model definition and number of experts fixed where the selected
-process range permits it. Any experiment that also increases the expert count
-must be identified as model scaling rather than ordinary weak scaling.
-
-### Hybrid layout comparison
-
-For a fixed total number of CPU cores, compare layouts such as:
+Every raw record includes at least:
 
 ```text
-1 rank  x 32 threads
-2 ranks x 16 threads
-4 ranks x  8 threads
-8 ranks x  4 threads
+Git commit and dirty state
+system, node list, compiler, MPI version, compile flags
+model/input/routing/calibration seeds
+N, E, d, h, k, MB, B
+parallelism, router mode, skew, hot layout
+placement, communication strategy, OpenMP schedule
+MPI ranks, OpenMP threads, affinity settings
+per-phase and end-to-end timings
+predicted and actual rank load and max/mean
+remote assignment ratio and bytes
+per-process expert-weight memory
+output hash and bitwise_ok
 ```
 
-The actual layouts will be adapted to the physical cores, sockets, and scheduler
-configuration of Atlas or Vanda.
+Failed configurations are retained and marked but excluded from performance
+statistics.
 
-## Timing and performance metrics
+## Scaling and formal experiment matrix
 
-Dataset/weight generation, file output, and one-time initialization are excluded
-from the primary inference runtime. The timed region includes:
+Speedup and efficiency use the true `serial` production implementation as the
+main denominator. One-rank parallel-program time is also retained to expose
+MPI/OpenMP framework overhead.
 
-- routing or controlled route generation, as labelled;
-- packing;
-- MPI dispatch;
-- local expert computation;
-- MPI return;
-- unpacking and weighted combine.
+| Experiment | Fixed | Varied |
+|---|---|---|
+| Strong scaling | Router mode, model, global input | Total cores; EP and DP on the same plot |
+| Controlled weak scaling | Uniform trace, tokens per core | Cores and global `N`; EP and DP on the same plot |
+| Hybrid layout | One node, fixed physical cores | `P x T_omp`; EP and DP |
+| Communication | Trace, placement, resources, bytes | Alltoallv vs P2P |
+| Load balance | Trace, communication, resources; `P=4` primary, `P=8` supplementary | RR vs LA across moderate-A/B/R1-R3 and extreme; DP and theoretical lower bound shown |
+| Skew vs hybrid layout (optional) | Extreme trace, fixed total cores | `P x T_omp` |
 
-Each phase must also be timed separately. Timings use `MPI_Wtime()`. Global
-phase time is the maximum elapsed time across ranks, because completion is
-limited by the slowest rank.
+A compute/communication sensitivity study may vary `h` as a supplementary
+experiment. With fixed `E=16`, ordinary weak scaling is limited to `P <= 16`.
+If serial is too short or a rank has fewer than about four task blocks per
+OpenMP thread, increase `N` or repeat forward passes before freezing the matrix.
 
-The initial measurement protocol is two untimed warm-up iterations followed by
-at least seven recorded iterations. The median is the primary reported value;
-minimum and maximum or another variability measure should also be retained. The
-same protocol must be used for every point in a comparison figure.
+## Memory interpretation and limitations
 
-Report both:
+The analytical per-process expert-weight model is
 
 ```text
-algorithmic speedup = true serial time / parallel time
-MPI scaling speedup = one-rank MPI time / P-rank MPI time
-parallel efficiency = speedup / P
+EP weight memory per process ~= (E / P) * one-expert weights
+DP weight memory per process ~= E * one-expert weights
 ```
 
-For hybrid experiments, also report efficiency relative to the total number of
-CPU cores where appropriate.
+The report extrapolates this model to realistic MoE dimensions (`d` in the
+thousands and `h` in the tens of thousands) to explain why replication becomes
+infeasible. It must state these limitations:
 
-## Required run metadata
+- routing skew is synthetic and does not represent a measured real-model
+  distribution;
+- teaching-scale expert weights fit easily, so DP is expected to be faster;
+- EP is studied for memory scalability and systems trade-offs, not because it
+  is expected to win at this scale; and
+- the project uses synthetic data, so there is no real-dataset conclusion.
 
-Every benchmark record must include:
+Do not assume in advance that LA beats RR or that Alltoallv beats P2P. Report
+the measured conditions under which each choice helps or hurts.
+
+## Cluster and environment checklist
+
+Before formal implementation and benchmarking, record:
+
+- primary system (Atlas or Vanda), course account, and allocation/charging;
+- node limits, physical cores, sockets, memory, and job-time limit;
+- scheduler and recommended MPI launcher;
+- compiler, MPI, and OpenMP module versions;
+- process and thread binding policy;
+- persistent/scratch directory and cleanup rules; and
+- whether login and compute nodes have the same CPU architecture.
+
+If login and compute CPUs differ, any `-march=native` build must be performed on
+a compute node. First validate 2 ranks x 1 thread, 2 ranks x 2 threads, and a
+two-node run with at least one rank per node.
+
+## Planned repository layout
 
 ```text
-Git commit
-host/system name
-compiler and version
-MPI implementation and version
-compile flags
-global seed
-all algorithm parameters
-routing mode and skew parameter
-MPI rank count
-OpenMP threads per rank
-process/thread affinity settings
-per-phase and total timings
-per-rank/per-expert assignment counts
-correctness result or checksum
+src/
+include/
+tests/
+configs/
+scripts/
+results/
+  raw/
+  processed/
+figures/
+report/
 ```
 
-The executable should eventually expose a shared command-line interface similar
-to:
+Raw results are never overwritten. Processed tables and figures must be
+reproducible from raw records and versioned scripts.
 
-```text
---tokens 65536
---d-model 256
---d-hidden 1024
---experts 32
---topk 2
---routing zipf
---zipf-alpha 1.0
---seed 5208
-```
+## Milestones
 
-MPI rank count is supplied by the MPI launcher and OpenMP thread count by
-`OMP_NUM_THREADS`.
+| Date | Required result |
+|---|---|
+| Oct 26-27 | Cluster confirmation, launch tests, definitions and validation gates (Steps 1-3) |
+| Oct 28 | Send progress email; start deterministic generation and traces (Step 4) |
+| Oct 28-29 | Micro tests, `naive_ref`, shared kernel, microbenchmark, `serial` (Steps 5-6) |
+| Oct 30-Nov 1 | DP baseline, communication loopback, pure-MPI EP (Steps 7-9) |
+| Nov 2-3 | Hybrid versions; Nov 3 checkpoint: EP and DP pass L2 |
+| Nov 4-5 | P2P, load-aware placement, pilot matrix, allocation budget (Steps 11-13) |
+| Nov 6-9 | Formal cluster experiments and reruns |
+| Nov 10-12 | Analysis, report, clean-environment reproduction, submission preparation |
 
-## Items still to determine before final benchmarking
+If the project falls behind, remove random layouts R1-R3 first, then the
+optional skew-by-hybrid-layout experiment, then supplementary
+compute/communication sensitivity. Do not remove the DP baseline, shared
+kernel, or L2 bitwise validation.
 
-- whether Atlas, Vanda, or both will be the primary experimental platform;
-- physical cores, sockets, memory, and interconnect of the selected nodes;
-- compiler and MPI module versions;
-- maximum node and MPI-rank count available for the project;
-- CPU, MPI-process, and OpenMP-thread binding policy;
-- final main values of `tokens`, `experts`, and `d_model` after calibration;
-- the additional optimization/design comparison beyond the three minimum
-  implementations; and
-- the final run matrix and job-time budget.
+## Build and run
 
-These choices must be frozen before collecting the results used in the report.
-Changing them after measurements begin requires either rerunning the affected
-configurations or clearly treating the new measurements as a separate study.
+Build, local correctness-test, SLURM, benchmark, and figure-generation commands
+will be added as the corresponding implementation steps land. The final README
+must support clean-directory reproduction of one correctness run, one
+representative cluster job, and one result figure.
 
-## Build and run instructions
+## AI usage
 
-Source code and build/run commands will be added after the experimental contract
-is agreed and the initial implementation is created.
+Any AI assistance used for design discussion, implementation, debugging,
+documentation, or report editing will be disclosed in the final report. All
+AI-assisted code and claims remain subject to team review, correctness tests,
+and reproducible experimental evidence.
