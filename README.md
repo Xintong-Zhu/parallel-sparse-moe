@@ -442,10 +442,23 @@ kernel, or L2 bitwise validation.
 
 ## Build and run
 
-Build, local correctness-test, SLURM, benchmark, and figure-generation commands
-will be added as the corresponding implementation steps land. The final README
-must support clean-directory reproduction of one correctness run, one
-representative cluster job, and one result figure.
+The Step 3 contract checker validates the frozen command-line settings and
+prints the deterministic contiguous Token partition used by later MPI versions.
+Build it on the selected cluster after loading its documented compiler and MPI
+environment:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target moe_contract_check
+./build/moe_contract_check --tokens 7 --inspect-ranks 4
+ctest --test-dir build --output-on-failure
+```
+
+The check and its unit tests are protocol validation, not performance runs.
+Build, scheduler, benchmark, and figure-generation commands will be expanded as
+the corresponding implementation steps land. The final README must support
+clean-directory reproduction of one correctness run, one representative cluster
+job, and one result figure.
 
 ## AI usage
 
