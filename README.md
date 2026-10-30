@@ -175,18 +175,20 @@ cannot select the same expert twice, `s_e <= 0.5`.
 | `moderate-R1/R2/R3` | Same shares as moderate-A | Three fixed-seed random four-expert sets |
 | `extreme` | Expert 0 at 40%; every other expert at 4% | `{0}` |
 
-The two experts for each token are sampled without replacement from calibrated
-weights using `hash(routing_seed, global_token_id)`. Sampling weights are
-calibrated offline and stored in configuration files; calibration is never part
-of a timed run.
+For a trace, target shares are converted to integer per-expert quotas using
+largest-remainder allocation over exactly `2N` assignments. The implementation
+then chooses two distinct experts with the largest remaining quotas for each
+global token ID; `hash(routing_seed, global_token_id, expert_id)` resolves
+quota ties. This gives the requested histogram exactly, subject only to integer
+rounding, and requires no calibration file or timed preprocessing.
 
 The realized share of each expert must be within:
 
 - 1 percentage point of the target for `N >= 8192`; and
 - 2 percentage points for `N = 2048`.
 
-Every `(workload, layout, N, seed)` records its realized histogram. Analysis uses
-the realized histogram rather than assuming exact target shares.
+Every `(workload, layout, N, seed)` records its realized histogram. Analysis
+uses this recorded histogram when calculating load and remote-byte metrics.
 
 Trace gate weights are deterministic:
 
@@ -195,8 +197,8 @@ a0 ~ Uniform(0.5, 1.0)
 a1 = 1 - a0
 ```
 
-Slot 0 is the larger weight. Calibration and test runs use the same calibrated
-sampling weights but different seeds.
+Slot 0 is the larger weight. Tests and timed runs derive their routes from the
+same frozen quota rule and record their routing seed.
 
 The command-line interface includes:
 
@@ -452,27 +454,25 @@ kernel, or L2 bitwise validation.
 
 ## Build and run
 
-The Step 3 contract checker validates the frozen command-line settings and
-prints the deterministic contiguous Token partition used by later MPI versions.
-Build it on the selected cluster after loading its documented compiler and MPI
-environment:
+The contract checker validates the frozen command-line settings and prints the
+deterministic contiguous Token partition. `moe_serial` implements the CPU
+serial path and compares it with an independent double-accumulation reference.
+`moe_mpi_loopback` performs the host-memory dispatch/return protocol without
+yet evaluating Experts. Build them only on an approved Vanda compute allocation
+after loading its documented compiler and MPI environment:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target moe_contract_check
+cmake --build build --target moe_contract_check moe_serial moe_mpi_loopback
 ./build/moe_contract_check --tokens 7 --inspect-ranks 4
 ctest --test-dir build --output-on-failure
+./build/moe_serial --router-mode trace --skew uniform --tokens 2048
+OMP_NUM_THREADS=1 mpirun -np 2 ./build/moe_mpi_loopback \
+  --router-mode trace --skew uniform --tokens 2048
 ```
 
-The check and its unit tests are protocol validation, not performance runs.
-Build, scheduler, benchmark, and figure-generation commands will be expanded as
-the corresponding implementation steps land. The final README must support
-clean-directory reproduction of one correctness run, one representative cluster
-job, and one result figure.
-
-## AI usage
-
-Any AI assistance used for design discussion, implementation, debugging,
-documentation, or report editing will be disclosed in the final report. All
-AI-assisted code and claims remain subject to team review, correctness tests,
-and reproducible experimental evidence.
+These are correctness checks, not performance runs. The loopback is deliberately
+backend-independent: `--backend cuda` is accepted as protocol metadata there,
+but `moe_serial` currently requires `--backend cpu` until the CUDA Expert kernel
+is added. The final README will add the scheduler, benchmark, and figure commands
+needed for clean-directory reproduction.

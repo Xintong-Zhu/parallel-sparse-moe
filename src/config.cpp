@@ -143,6 +143,10 @@ std::string validate_config(const MoEConfig& config) {
   if (config.router_mode == RouterMode::kRouter && config.skew != Skew::kUniform) {
     return "controlled skew requires --router-mode trace";
   }
+  if (config.router_mode == RouterMode::kTrace && config.skew != Skew::kUniform &&
+      config.experts != 16) {
+    return "the frozen moderate and extreme trace layouts require --experts 16";
+  }
   return {};
 }
 
