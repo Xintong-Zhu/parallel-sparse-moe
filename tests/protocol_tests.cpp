@@ -58,11 +58,12 @@ void test_assignment_validation() {
 void test_config_contract() {
   const auto valid = moe::parse_command_line(
       {"--router-mode", "trace", "--skew", "moderate", "--hot-layout", "B",
-       "--placement", "la", "--communication", "p2p", "--topk", "2"});
+       "--placement", "la", "--communication", "p2p", "--backend", "cuda", "--topk", "2"});
   require(valid.ok, "valid trace configuration must parse");
   require(valid.config.router_mode == moe::RouterMode::kTrace &&
               valid.config.skew == moe::Skew::kModerate &&
-              valid.config.placement == moe::Placement::kLoadAware,
+              valid.config.placement == moe::Placement::kLoadAware &&
+              valid.config.expert_backend == moe::ExpertBackend::kCuda,
           "parsed trace options must retain their values");
 
   const auto invalid =

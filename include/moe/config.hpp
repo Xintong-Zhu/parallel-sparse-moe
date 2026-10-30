@@ -8,6 +8,7 @@
 namespace moe {
 
 enum class Parallelism { kExpertParallel, kDataParallel };
+enum class ExpertBackend { kCpu, kCuda };
 enum class RouterMode { kRouter, kTrace };
 enum class Skew { kUniform, kModerate, kExtreme };
 enum class HotLayout { kA, kB, kR1, kR2, kR3 };
@@ -28,6 +29,7 @@ struct MoEConfig {
   std::uint64_t calibration_seed = 161803;
 
   Parallelism parallelism = Parallelism::kExpertParallel;
+  ExpertBackend expert_backend = ExpertBackend::kCpu;
   RouterMode router_mode = RouterMode::kRouter;
   Skew skew = Skew::kUniform;
   HotLayout hot_layout = HotLayout::kA;
@@ -44,6 +46,7 @@ struct ParseResult {
 };
 
 const char* to_string(Parallelism value);
+const char* to_string(ExpertBackend value);
 const char* to_string(RouterMode value);
 const char* to_string(Skew value);
 const char* to_string(HotLayout value);

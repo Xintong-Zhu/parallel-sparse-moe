@@ -70,6 +70,7 @@ int main(int argc, char** argv) {
             << ", h=" << config.hidden_dimension << ", E=" << config.experts
             << ", top-k=" << config.top_k << '\n'
             << "  parallelism=" << moe::to_string(config.parallelism)
+            << ", backend=" << moe::to_string(config.expert_backend)
             << ", router-mode=" << moe::to_string(config.router_mode)
             << ", skew=" << moe::to_string(config.skew)
             << ", hot-layout=" << moe::to_string(config.hot_layout) << '\n'

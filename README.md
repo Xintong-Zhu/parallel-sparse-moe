@@ -5,6 +5,8 @@ forward pass using C++, MPI, and OpenMP. The main subject is Expert Parallelism
 (EP): tokens are dispatched to the MPI ranks that own their selected experts,
 processed there, and returned to their source ranks. A replicated Data
 Parallel (DP) implementation provides a communication-free reference.
+A CUDA Expert-FFN backend is an additional, separately reported extension; its
+staged integration plan is in [docs/gpu-integration-plan.md](docs/gpu-integration-plan.md).
 
 > **Project status:** design and implementation, protocol version 0.2.
 > This README is the team's frozen experimental contract and supersedes the
@@ -100,8 +102,10 @@ is therefore practical in this experiment and motivates the DP reference line.
 | `serial` | Serial implementation using the shared production kernel | Speedup denominator |
 | `--parallelism dp` | Every rank generates all experts and processes only its local tokens | Replicated, communication-free reference |
 | `--parallelism ep` | Every rank stores only its assigned experts; tokens require dispatch and return | Main research implementation |
+| `--backend cpu` | OpenMP Expert kernel on CPU | Default and primary experimental backend |
+| `--backend cuda` | One exclusive GPU per MPI rank | CUDA extension; implementation follows the CPU correctness gates |
 
-Both DP and EP support OpenMP. MPI is initialized with
+Both DP and EP support OpenMP on the CPU backend. MPI is initialized with
 `MPI_Init_thread(..., MPI_THREAD_FUNNELED, ...)`; the provided level is checked,
 and MPI calls occur only on the main thread outside OpenMP parallel regions.
 
@@ -198,6 +202,7 @@ The command-line interface includes:
 
 ```text
 --parallelism ep|dp
+--backend cpu|cuda
 --router-mode router|trace
 --skew uniform|moderate|extreme
 --hot-layout A|B|R1|R2|R3
@@ -278,7 +283,8 @@ labelled separately.
 |---|---|---|
 | L0 | Hand-computable micro cases | Relative error `<= 1e-6` |
 | L1 | `serial` vs double-accumulation `naive_ref` | Elementwise `abs(delta) <= 1e-4 + 1e-4*abs(ref)` and relative L2 `<= 1e-5` |
-| L2 | `serial` vs all Trace DP/EP process/thread/communication/placement variants | Bitwise equality (`memcmp`) |
+| L2-CPU | `serial` vs all Trace CPU DP/EP process/thread/communication/placement variants | Bitwise equality (`memcmp`) |
+| L2-CUDA | `serial` vs CUDA variants | Bitwise-identical routes and assignment metadata; output follows the L1 numerical tolerance |
 | L3 | Router mode across implementations | Top-2 IDs and routing weights are bitwise identical before output comparison |
 | L4 | `serial` vs `naive_ref` routing | Any differing token must have second/third score gap `< 1e-4`; report and exclude it from L1 output comparison |
 
@@ -323,7 +329,7 @@ whether router computation is included.
 - Interleave variants in the same job where possible.
 - Run comparable variants on the same allocated nodes.
 - Record single-node and cross-node results separately.
-- A result enters a performance figure only when `bitwise_ok = true`.
+- A CPU result enters a performance figure only when `bitwise_ok = true`; CUDA results require the L2-CUDA gate.
 
 Every raw record includes at least:
 
@@ -332,10 +338,11 @@ Git commit and dirty state
 system, node list, compiler, MPI version, compile flags
 model/input/routing/calibration seeds
 N, E, d, h, k, MB, B
-parallelism, router mode, skew, hot layout
+parallelism, backend, router mode, skew, hot layout
 placement, communication strategy, OpenMP schedule
 MPI ranks, OpenMP threads, affinity settings
-per-phase and end-to-end timings
+GPU model, CUDA runtime/compiler version, visible-device mapping (CUDA runs)
+per-phase and end-to-end timings, including H2D/kernel/D2H (CUDA runs)
 predicted and actual rank load and max/mean
 remote assignment ratio and bytes
 per-process expert-weight memory
@@ -359,6 +366,8 @@ MPI/OpenMP framework overhead.
 | Communication | Trace, placement, resources, bytes | Alltoallv vs P2P |
 | Load balance | Trace, communication, resources; `P=4` primary, `P=8` supplementary | RR vs LA across moderate-A/B/R1-R3 and extreme; DP and theoretical lower bound shown |
 | Skew vs hybrid layout (optional) | Extreme trace, fixed total cores | `P x T_omp` |
+| GPU compute breakdown | One GPU, one MPI rank | CPU/CUDA Expert FFN, H2D, kernel, D2H, and end-to-end time |
+| GPU EP (optional) | Two exclusive GPUs, one MPI rank per GPU | Dispatch/return with CUDA Experts; reported separately from CPU scaling |
 
 A compute/communication sensitivity study may vary `h` as a supplementary
 experiment. With fixed `E=16`, ordinary weak scaling is limited to `P <= 16`.
@@ -396,6 +405,7 @@ Before formal implementation and benchmarking, record:
 - node limits, physical cores, sockets, memory, and job-time limit;
 - scheduler and recommended MPI launcher;
 - compiler, MPI, and OpenMP module versions;
+- CUDA toolkit, GPU model, driver/runtime versions, and GPU-rank mapping when CUDA is used;
 - process and thread binding policy;
 - persistent/scratch directory and cleanup rules; and
 - whether login and compute nodes have the same CPU architecture.

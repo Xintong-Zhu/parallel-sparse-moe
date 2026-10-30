@@ -76,6 +76,10 @@ const char* to_string(Parallelism value) {
   return value == Parallelism::kExpertParallel ? "ep" : "dp";
 }
 
+const char* to_string(ExpertBackend value) {
+  return value == ExpertBackend::kCpu ? "cpu" : "cuda";
+}
+
 const char* to_string(RouterMode value) {
   return value == RouterMode::kRouter ? "router" : "trace";
 }
@@ -181,6 +185,12 @@ ParseResult parse_command_line(const std::vector<std::string>& arguments) {
           result.error = "--parallelism must be ep or dp";
           return result;
         }
+      } else if (argument == "--backend") {
+        if (!parse_enum(value, {{"cpu", ExpertBackend::kCpu}, {"cuda", ExpertBackend::kCuda}},
+                        result.config.expert_backend)) {
+          result.error = "--backend must be cpu or cuda";
+          return result;
+        }
       } else if (argument == "--router-mode") {
         if (!parse_enum(value, {{"router", RouterMode::kRouter}, {"trace", RouterMode::kTrace}},
                         result.config.router_mode)) {
@@ -239,7 +249,7 @@ Frozen model options:
   --model-seed S --input-seed S --routing-seed S --calibration-seed S
 
 Parallel protocol options:
-  --parallelism ep|dp --router-mode router|trace
+  --parallelism ep|dp --backend cpu|cuda --router-mode router|trace
   --skew uniform|moderate|extreme --hot-layout A|B|R1|R2|R3
   --placement rr|la --communication alltoallv|p2p
   --omp-schedule static|dynamic
