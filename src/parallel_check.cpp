@@ -59,8 +59,10 @@ void append(moe::AssignmentBuffer& destination, const moe::WireAssignmentHeader&
 }
 
 moe::AssignmentBuffer exchange(const Buffers& destinations, std::uint32_t dimension,
+                               moe::Communication communication, int tag_base,
                                MPI_Comm communicator) {
-  int world = 0;
+  int rank = 0, world = 0;
+  MPI_Comm_rank(communicator, &rank);
   MPI_Comm_size(communicator, &world);
   if (destinations.size() != static_cast<std::size_t>(world)) {
     throw std::invalid_argument("one send buffer is required per rank");
@@ -110,18 +112,57 @@ moe::AssignmentBuffer exchange(const Buffers& destinations, std::uint32_t dimens
   const auto send_value_offsets = scale(send_offsets, dimension);
   const auto recv_value_counts = scale(receive_counts, dimension);
   const auto recv_value_offsets = scale(receive_offsets, dimension);
-  moe::WireAssignmentHeader empty_header{};
-  float empty_value = 0.0F;
-  MPI_Alltoallv(outbound.headers.empty() ? &empty_header : outbound.headers.data(),
-                send_header_counts.data(), send_header_offsets.data(), MPI_BYTE,
-                inbound.headers.empty() ? &empty_header : inbound.headers.data(),
-                recv_header_counts.data(), recv_header_offsets.data(), MPI_BYTE,
-                communicator);
-  MPI_Alltoallv(outbound.token_values.empty() ? &empty_value : outbound.token_values.data(),
-                send_value_counts.data(), send_value_offsets.data(), MPI_FLOAT,
-                inbound.token_values.empty() ? &empty_value : inbound.token_values.data(),
-                recv_value_counts.data(), recv_value_offsets.data(), MPI_FLOAT,
-                communicator);
+  if (communication == moe::Communication::kAlltoallv) {
+    moe::WireAssignmentHeader empty_header{};
+    float empty_value = 0.0F;
+    MPI_Alltoallv(outbound.headers.empty() ? &empty_header : outbound.headers.data(),
+                  send_header_counts.data(), send_header_offsets.data(), MPI_BYTE,
+                  inbound.headers.empty() ? &empty_header : inbound.headers.data(),
+                  recv_header_counts.data(), recv_header_offsets.data(), MPI_BYTE,
+                  communicator);
+    MPI_Alltoallv(outbound.token_values.empty() ? &empty_value : outbound.token_values.data(),
+                  send_value_counts.data(), send_value_offsets.data(), MPI_FLOAT,
+                  inbound.token_values.empty() ? &empty_value : inbound.token_values.data(),
+                  recv_value_counts.data(), recv_value_offsets.data(), MPI_FLOAT,
+                  communicator);
+  } else {
+    if (send_counts[rank] != receive_counts[rank]) {
+      throw std::runtime_error("self-send count differs from self-receive count");
+    }
+    if (send_counts[rank] > 0) {
+      std::copy_n(outbound.headers.data() + send_offsets[rank], send_counts[rank],
+                  inbound.headers.data() + receive_offsets[rank]);
+      std::copy_n(outbound.token_values.data() + send_value_offsets[rank],
+                  send_value_counts[rank],
+                  inbound.token_values.data() + recv_value_offsets[rank]);
+    }
+    std::vector<MPI_Request> requests;
+    requests.reserve(4U * static_cast<std::size_t>(world - 1));
+    // Post every receive before any send; each peer occupies its own slice.
+    for (int peer = 0; peer < world; ++peer) {
+      if (peer == rank || receive_counts[peer] == 0) continue;
+      requests.push_back(MPI_REQUEST_NULL);
+      MPI_Irecv(inbound.headers.data() + receive_offsets[peer], recv_header_counts[peer],
+                MPI_BYTE, peer, tag_base, communicator, &requests.back());
+      requests.push_back(MPI_REQUEST_NULL);
+      MPI_Irecv(inbound.token_values.data() + recv_value_offsets[peer],
+                recv_value_counts[peer], MPI_FLOAT, peer, tag_base + 1, communicator,
+                &requests.back());
+    }
+    for (int peer = 0; peer < world; ++peer) {
+      if (peer == rank || send_counts[peer] == 0) continue;
+      requests.push_back(MPI_REQUEST_NULL);
+      MPI_Isend(outbound.headers.data() + send_offsets[peer], send_header_counts[peer],
+                MPI_BYTE, peer, tag_base, communicator, &requests.back());
+      requests.push_back(MPI_REQUEST_NULL);
+      MPI_Isend(outbound.token_values.data() + send_value_offsets[peer],
+                send_value_counts[peer], MPI_FLOAT, peer, tag_base + 1, communicator,
+                &requests.back());
+    }
+    if (!requests.empty()) {
+      MPI_Waitall(mpi_count(requests.size()), requests.data(), MPI_STATUSES_IGNORE);
+    }
+  }
   return inbound;
 }
 
@@ -198,7 +239,8 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
       append(dispatch[owner], wire, token, config.dimension);
     }
   }
-  const auto received = exchange(dispatch, config.dimension, MPI_COMM_WORLD);
+  const auto received = exchange(dispatch, config.dimension, config.communication,
+                                 1000, MPI_COMM_WORLD);
   std::string error;
   int valid = moe::valid_assignment_buffer(received, config, world, &error) ? 1 : 0;
   if (valid) {
@@ -250,7 +292,8 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
            computed.data() + i * config.dimension,
            config.dimension);
   }
-  const auto returned = exchange(returns, config.dimension, MPI_COMM_WORLD);
+  const auto returned = exchange(returns, config.dimension, config.communication,
+                                 1100, MPI_COMM_WORLD);
   const std::size_t expected = routes.size() * 2U;
   valid = returned.headers.size() == expected;
   std::vector<unsigned char> seen(expected, 0);
@@ -299,12 +342,13 @@ int run(int argc, char** argv) {
   if (valid) {
     const auto& c = parsed.config;
     valid = c.expert_backend == moe::ExpertBackend::kCpu &&
-            c.placement == moe::Placement::kRoundRobin &&
-            c.communication == moe::Communication::kAlltoallv && c.tokens <= 8192;
+            c.placement == moe::Placement::kRoundRobin && c.tokens <= 8192 &&
+            (c.parallelism == moe::Parallelism::kExpertParallel ||
+             c.communication == moe::Communication::kAlltoallv);
   }
   MPI_Allreduce(MPI_IN_PLACE, &valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
   if (!valid) {
-    if (rank == 0) std::cerr << "Use valid CPU options, RR placement, Alltoallv, N<=8192; "
+    if (rank == 0) std::cerr << "Use valid CPU options, RR placement, N<=8192; "
                                "this program checks correctness, not performance.\n";
     MPI_Finalize();
     return 2;
@@ -341,7 +385,8 @@ int run(int argc, char** argv) {
     if (rank == 0) {
       std::cout << "CPU " << moe::to_string(config.parallelism) << " correctness: "
                 << (passed ? "PASS" : "FAIL") << " (P=" << world
-                << ", N=" << config.tokens << ")\n";
+                << ", N=" << config.tokens
+                << ", communication=" << moe::to_string(config.communication) << ")\n";
     }
     MPI_Finalize();
     return passed ? 0 : 1;

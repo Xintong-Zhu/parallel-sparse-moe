@@ -480,7 +480,7 @@ needed for clean-directory reproduction.
 ### CPU DP/EP correctness checkpoint
 
 `moe_parallel_check` now joins the existing Expert kernel to local DP
-execution or EP Alltoallv dispatch, remote Expert evaluation, return, and fixed
+execution or EP dispatch, remote Expert evaluation, return, and fixed
 slot-order combine. It checks every local output bitwise against the serial
 implementation, including duplicate/missing return slots. Run on an allocated
 compute node after loading the compiler, MPI, and CMake modules:
@@ -494,15 +494,18 @@ OMP_NUM_THREADS=1 mpirun -np 2 ./build/moe_parallel_check \
   --parallelism dp --router-mode trace --skew uniform --tokens 2048
 ```
 
-This checkpoint intentionally accepts only CPU, round-robin placement,
-Alltoallv, and `N <= 8192`. Every rank currently creates the complete model
+This checkpoint intentionally accepts only CPU, round-robin placement, and
+`N <= 8192`. EP can use `--communication alltoallv|p2p`; DP has no exchange and
+uses the default `alltoallv` setting. The P2P variant exchanges counts, posts
+nonblocking receives and sends for the two payload arrays, then waits for all
+requests. Dispatch and return use distinct tags. Every rank creates the complete model
 and global serial reference for verification, so this is **not** the final
 memory-scalable EP implementation or a performance benchmark. Do not use its
 runtime in scaling figures. Serial, DP, and EP now group assignments by Expert
 and call a shared micro-batch kernel (currently `MB=8`); the unit test compares
 it bitwise with the per-Token scalar kernel. In DP/EP, OpenMP distributes
 disjoint Expert micro-batch tasks across threads. Model partitioning, tuned
-task block size, P2P, load-aware placement, and timed repeated runs remain to
+task block size, load-aware placement, and timed repeated runs remain to
 be implemented. The current
 `moe_serial` `forward_seconds` includes allocation and is only a functional
 diagnostic, not yet a formal benchmark result.

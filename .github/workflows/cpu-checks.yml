@@ -31,6 +31,11 @@ jobs:
           OMP_NUM_THREADS=1 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048
           OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048 --omp-schedule dynamic
           OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew moderate --tokens 2048 --omp-schedule dynamic
+          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 2048 --omp-schedule static
+          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew moderate --tokens 2048 --omp-schedule dynamic
+          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 1 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=1 mpirun --host localhost:1 -np 1 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 7 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=1 mpirun --host localhost:4 -np 4 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 7 --dim 4 --hidden 8 --experts 4
           OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism dp --router-mode router --tokens 2048
           OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism dp --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
           OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 1 --dim 4 --hidden 8 --experts 4
