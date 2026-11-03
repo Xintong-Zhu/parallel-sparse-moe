@@ -41,6 +41,38 @@ void expert_forward_cpu(const ExpertWeights& weights, const MoEConfig& config,
   }
 }
 
+void expert_forward_cpu_batch(const ExpertWeights& weights, const MoEConfig& config,
+                              const float* tokens, std::size_t count, float* outputs,
+                              std::vector<float>& hidden_scratch) {
+  verify_shape(weights, config);
+  if (count == 0) return;
+  const std::size_t d = config.dimension;
+  const std::size_t h = config.hidden_dimension;
+  hidden_scratch.assign(count * h, 0.0F);
+  std::fill(outputs, outputs + count * d, 0.0F);
+  for (std::size_t feature = 0; feature < d; ++feature) {
+    const float* row = weights.w1.data() + feature * h;
+    for (std::size_t token = 0; token < count; ++token) {
+      const float value = tokens[token * d + feature];
+      float* hidden_row = hidden_scratch.data() + token * h;
+      for (std::size_t hidden = 0; hidden < h; ++hidden) {
+        hidden_row[hidden] += value * row[hidden];
+      }
+    }
+  }
+  for (auto& value : hidden_scratch) value = std::max(value, 0.0F);
+  for (std::size_t hidden = 0; hidden < h; ++hidden) {
+    const float* row = weights.w2.data() + hidden * d;
+    for (std::size_t token = 0; token < count; ++token) {
+      const float value = hidden_scratch[token * h + hidden];
+      float* output_row = outputs + token * d;
+      for (std::size_t feature = 0; feature < d; ++feature) {
+        output_row[feature] += value * row[feature];
+      }
+    }
+  }
+}
+
 void expert_forward_reference(const ExpertWeights& weights, const MoEConfig& config,
                               const float* token, float* output,
                               std::vector<double>& hidden_scratch) {

@@ -1,11 +1,13 @@
 #include "moe/config.hpp"
 #include "moe/data.hpp"
+#include "moe/expert.hpp"
 #include "moe/protocol.hpp"
 #include "moe/serial.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -81,6 +83,56 @@ int main() {
                 "trace route IDs agree");
   }
   ok &= check(max_abs_error <= 1.0e-4F, "serial output agrees with FP64 reference");
+
+  // The batch kernel must preserve the scalar kernel's exact FP32 operation
+  // order, including partial batches used by the grouped serial path.
+  moe::MoEConfig batch_config = config;
+  batch_config.tokens = 9;
+  batch_config.dimension = 128;
+  batch_config.hidden_dimension = 256;
+  const auto batch_model = moe::generate_model(batch_config);
+  const auto batch_tokens = moe::generate_tokens(batch_config, 0, batch_config.tokens);
+  for (std::size_t count : {std::size_t{1}, std::size_t{4}, std::size_t{7},
+                            std::size_t{8}, std::size_t{9}}) {
+    std::vector<float> batched(count * batch_config.dimension);
+    std::vector<float> scalar(count * batch_config.dimension);
+    std::vector<float> batch_scratch, scalar_scratch;
+    moe::expert_forward_cpu_batch(batch_model.experts[0], batch_config,
+                                  batch_tokens.data(), count, batched.data(), batch_scratch);
+    for (std::size_t token = 0; token < count; ++token) {
+      moe::expert_forward_cpu(batch_model.experts[0], batch_config,
+                              batch_tokens.data() + token * batch_config.dimension,
+                              scalar.data() + token * batch_config.dimension, scalar_scratch);
+    }
+    ok &= check(std::memcmp(batched.data(), scalar.data(),
+                            batched.size() * sizeof(float)) == 0,
+                "batched and scalar Expert outputs are bitwise identical");
+  }
+
+  moe::MoEConfig grouped_config = config;
+  grouped_config.tokens = 17;
+  const auto grouped_model = moe::generate_model(grouped_config);
+  const auto grouped_tokens = moe::generate_tokens(grouped_config, 0, grouped_config.tokens);
+  const auto grouped_trace = moe::generate_controlled_trace(grouped_config);
+  const auto grouped = moe::forward_serial(grouped_config, grouped_model,
+                                            grouped_tokens, &grouped_trace);
+  std::vector<float> scalar_output(grouped.output.size());
+  std::vector<float> first(grouped_config.dimension), second(grouped_config.dimension), scratch;
+  for (std::size_t token = 0; token < grouped_config.tokens; ++token) {
+    const auto& route = grouped.routes[token];
+    const float* input = grouped_tokens.data() + token * grouped_config.dimension;
+    moe::expert_forward_cpu(grouped_model.experts[route.expert_ids[0]], grouped_config,
+                            input, first.data(), scratch);
+    moe::expert_forward_cpu(grouped_model.experts[route.expert_ids[1]], grouped_config,
+                            input, second.data(), scratch);
+    for (std::size_t feature = 0; feature < grouped_config.dimension; ++feature) {
+      scalar_output[token * grouped_config.dimension + feature] =
+          route.gate_weights[0] * first[feature] + route.gate_weights[1] * second[feature];
+    }
+  }
+  ok &= check(std::memcmp(grouped.output.data(), scalar_output.data(),
+                          grouped.output.size() * sizeof(float)) == 0,
+              "grouped serial output equals per-Token execution bitwise");
 
   if (!ok) {
     return 1;

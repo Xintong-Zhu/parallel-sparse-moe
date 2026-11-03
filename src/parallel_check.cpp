@@ -23,6 +23,25 @@
 namespace {
 
 using Buffers = std::vector<moe::AssignmentBuffer>;
+constexpr std::size_t micro_batch = 8;
+
+struct ExpertTask {
+  std::uint32_t expert;
+  std::size_t begin;
+  std::size_t count;
+};
+
+std::vector<ExpertTask> make_tasks(
+    const std::vector<std::vector<std::size_t>>& by_expert) {
+  std::vector<ExpertTask> tasks;
+  for (std::size_t expert = 0; expert < by_expert.size(); ++expert) {
+    for (std::size_t begin = 0; begin < by_expert[expert].size(); begin += micro_batch) {
+      tasks.push_back({static_cast<std::uint32_t>(expert), begin,
+                       std::min(micro_batch, by_expert[expert].size() - begin)});
+    }
+  }
+  return tasks;
+}
 
 int mpi_count(std::size_t value) {
   if (value > static_cast<std::size_t>(INT_MAX)) {
@@ -124,23 +143,41 @@ std::vector<float> forward_dp(const moe::MoEConfig& config, const moe::Model& mo
                               const std::vector<float>& tokens,
                               const std::vector<moe::RoutingDecision>& routes) {
   std::vector<float> output(tokens.size());
-  // Each thread owns its scratch and writes only its assigned Token outputs.
+  const std::size_t d = config.dimension;
+  std::vector<std::vector<std::size_t>> by_expert(config.experts);
+  for (std::size_t token = 0; token < routes.size(); ++token) {
+    for (std::size_t slot = 0; slot < 2; ++slot) {
+      by_expert[routes[token].expert_ids[slot]].push_back(token * 2 + slot);
+    }
+  }
+  const auto tasks = make_tasks(by_expert);
+  std::vector<float> slots(routes.size() * 2 * d);
+  // Each task writes disjoint [Token, slot] outputs. Scratch is thread-private.
 #pragma omp parallel
   {
-    std::vector<float> partial0(config.dimension), partial1(config.dimension), scratch;
+    std::vector<float> batch_tokens(micro_batch * d), batch_outputs(micro_batch * d), scratch;
 #pragma omp for schedule(runtime)
-    for (std::ptrdiff_t item = 0; item < static_cast<std::ptrdiff_t>(routes.size()); ++item) {
-      const auto local = static_cast<std::size_t>(item);
-      const float* token = tokens.data() + local * config.dimension;
-      const auto& route = routes[local];
-      moe::expert_forward_cpu(model.experts[route.expert_ids[0]], config, token,
-                              partial0.data(), scratch);
-      moe::expert_forward_cpu(model.experts[route.expert_ids[1]], config, token,
-                              partial1.data(), scratch);
-      for (std::uint32_t j = 0; j < config.dimension; ++j) {
-        output[local * config.dimension + j] =
-            route.gate_weights[0] * partial0[j] + route.gate_weights[1] * partial1[j];
+    for (std::ptrdiff_t task_id = 0; task_id < static_cast<std::ptrdiff_t>(tasks.size());
+         ++task_id) {
+      const auto& task = tasks[static_cast<std::size_t>(task_id)];
+      const auto& assignments = by_expert[task.expert];
+      for (std::size_t item = 0; item < task.count; ++item) {
+        const std::size_t token = assignments[task.begin + item] / 2;
+        std::copy_n(tokens.data() + token * d, d, batch_tokens.data() + item * d);
       }
+      moe::expert_forward_cpu_batch(model.experts[task.expert], config, batch_tokens.data(),
+                                    task.count, batch_outputs.data(), scratch);
+      for (std::size_t item = 0; item < task.count; ++item) {
+        std::copy_n(batch_outputs.data() + item * d, d,
+                    slots.data() + assignments[task.begin + item] * d);
+      }
+    }
+  }
+  for (std::size_t token = 0; token < routes.size(); ++token) {
+    for (std::size_t j = 0; j < d; ++j) {
+      output[token * d + j] =
+          routes[token].gate_weights[0] * slots[(token * 2) * d + j] +
+          routes[token].gate_weights[1] * slots[(token * 2 + 1) * d + j];
     }
   }
   return output;
@@ -179,18 +216,32 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
   }
   Buffers returns(world);
   std::vector<float> computed(received.headers.size() * config.dimension);
+  const std::size_t d = config.dimension;
+  std::vector<std::vector<std::size_t>> by_expert(config.experts);
+  for (std::size_t i = 0; i < received.headers.size(); ++i) {
+    by_expert[moe::unpack_header(received.headers[i]).expert_id].push_back(i);
+  }
+  const auto tasks = make_tasks(by_expert);
   // MPI calls stay outside OpenMP regions (MPI_THREAD_FUNNELED).
 #pragma omp parallel
   {
-    std::vector<float> scratch;
+    std::vector<float> batch_tokens(micro_batch * d), batch_outputs(micro_batch * d), scratch;
 #pragma omp for schedule(runtime)
-    for (std::ptrdiff_t item = 0;
-         item < static_cast<std::ptrdiff_t>(received.headers.size()); ++item) {
-      const auto i = static_cast<std::size_t>(item);
-      const auto header = moe::unpack_header(received.headers[i]);
-      moe::expert_forward_cpu(model.experts[header.expert_id], config,
-                              received.token_values.data() + i * config.dimension,
-                              computed.data() + i * config.dimension, scratch);
+    for (std::ptrdiff_t task_id = 0; task_id < static_cast<std::ptrdiff_t>(tasks.size());
+         ++task_id) {
+      const auto& task = tasks[static_cast<std::size_t>(task_id)];
+      const auto& assignments = by_expert[task.expert];
+      for (std::size_t item = 0; item < task.count; ++item) {
+        const std::size_t received_index = assignments[task.begin + item];
+        std::copy_n(received.token_values.data() + received_index * d, d,
+                    batch_tokens.data() + item * d);
+      }
+      moe::expert_forward_cpu_batch(model.experts[task.expert], config, batch_tokens.data(),
+                                    task.count, batch_outputs.data(), scratch);
+      for (std::size_t item = 0; item < task.count; ++item) {
+        std::copy_n(batch_outputs.data() + item * d, d,
+                    computed.data() + assignments[task.begin + item] * d);
+      }
     }
   }
   for (std::size_t i = 0; i < received.headers.size(); ++i) {

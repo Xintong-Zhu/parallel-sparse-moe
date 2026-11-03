@@ -479,7 +479,7 @@ needed for clean-directory reproduction.
 
 ### CPU DP/EP correctness checkpoint
 
-`moe_parallel_check` now joins the existing serial Expert kernel to local DP
+`moe_parallel_check` now joins the existing Expert kernel to local DP
 execution or EP Alltoallv dispatch, remote Expert evaluation, return, and fixed
 slot-order combine. It checks every local output bitwise against the serial
 implementation, including duplicate/missing return slots. Run on an allocated
@@ -498,10 +498,16 @@ This checkpoint intentionally accepts only CPU, round-robin placement,
 Alltoallv, and `N <= 8192`. Every rank currently creates the complete model
 and global serial reference for verification, so this is **not** the final
 memory-scalable EP implementation or a performance benchmark. Do not use its
-runtime in scaling figures. Model partitioning, batched Expert tasks, P2P,
-load-aware placement, and timed repeated runs remain to be implemented.
+runtime in scaling figures. Serial, DP, and EP now group assignments by Expert
+and call a shared micro-batch kernel (currently `MB=8`); the unit test compares
+it bitwise with the per-Token scalar kernel. In DP/EP, OpenMP distributes
+disjoint Expert micro-batch tasks across threads. Model partitioning, tuned
+task block size, P2P, load-aware placement, and timed repeated runs remain to
+be implemented. The current
+`moe_serial` `forward_seconds` includes allocation and is only a functional
+diagnostic, not yet a formal benchmark result.
 
-The checkpoint can also run its per-token Expert evaluations with OpenMP. Set
+The checkpoint can also run its Expert micro-batch tasks with OpenMP. Set
 `OMP_NUM_THREADS` and choose `--omp-schedule static|dynamic`; each thread has
 private scratch, while MPI calls remain on the main thread. The automated
 GitHub Actions CPU check compiles and exercises both one-thread and two-thread
