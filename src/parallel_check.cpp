@@ -90,7 +90,7 @@ moe::AssignmentBuffer exchange(const Buffers& destinations, std::uint32_t dimens
   const auto send_value_offsets = scale(send_offsets, dimension);
   const auto recv_value_counts = scale(receive_counts, dimension);
   const auto recv_value_offsets = scale(receive_offsets, dimension);
-  unsigned char empty_header = 0;
+  moe::WireAssignmentHeader empty_header{};
   float empty_value = 0.0F;
   MPI_Alltoallv(outbound.headers.empty() ? &empty_header : outbound.headers.data(),
                 send_header_counts.data(), send_header_offsets.data(), MPI_BYTE,
