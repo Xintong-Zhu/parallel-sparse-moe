@@ -476,3 +476,27 @@ backend-independent: `--backend cuda` is accepted as protocol metadata there,
 but `moe_serial` currently requires `--backend cpu` until the CUDA Expert kernel
 is added. The final README will add the scheduler, benchmark, and figure commands
 needed for clean-directory reproduction.
+
+### CPU DP/EP correctness checkpoint
+
+`moe_parallel_check` now joins the existing serial Expert kernel to local DP
+execution or EP Alltoallv dispatch, remote Expert evaluation, return, and fixed
+slot-order combine. It checks every local output bitwise against the serial
+implementation, including duplicate/missing return slots. Run on an allocated
+compute node after loading the compiler, MPI, and CMake modules:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target moe_parallel_check -j 8
+OMP_NUM_THREADS=1 mpirun -np 2 ./build/moe_parallel_check \
+  --parallelism ep --router-mode trace --skew uniform --tokens 2048
+OMP_NUM_THREADS=1 mpirun -np 2 ./build/moe_parallel_check \
+  --parallelism dp --router-mode trace --skew uniform --tokens 2048
+```
+
+This checkpoint intentionally accepts only CPU, round-robin placement,
+Alltoallv, and `N <= 8192`. Every rank currently creates the complete model
+and global serial reference for verification, so this is **not** the final
+memory-scalable EP implementation or a performance benchmark. Do not use its
+runtime in scaling figures. Model partitioning, batched/OpenMP Expert tasks,
+P2P, load-aware placement, and timed repeated runs remain to be implemented.
