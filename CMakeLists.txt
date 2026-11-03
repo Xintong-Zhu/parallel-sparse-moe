@@ -32,7 +32,7 @@ add_executable(moe_mpi_loopback src/mpi_loopback.cpp)
 target_link_libraries(moe_mpi_loopback PRIVATE moe_core MPI::MPI_CXX)
 
 add_executable(moe_parallel_check src/parallel_check.cpp)
-target_link_libraries(moe_parallel_check PRIVATE moe_core MPI::MPI_CXX)
+target_link_libraries(moe_parallel_check PRIVATE moe_core MPI::MPI_CXX OpenMP::OpenMP_CXX)
 
 if(BUILD_TESTING)
   add_executable(moe_protocol_tests tests/protocol_tests.cpp)

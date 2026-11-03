@@ -1,0 +1,34 @@
+name: CPU correctness
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MPI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j 2
+      - name: Unit and MPI correctness checks
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure
+          ./build/moe_contract_check --tokens 7 --inspect-ranks 4
+          ./build/moe_serial --router-mode trace --skew uniform --tokens 2048
+          OMP_NUM_THREADS=1 mpirun --host localhost:2 -np 2 ./build/moe_mpi_loopback --router-mode trace --skew uniform --tokens 2048
+          OMP_NUM_THREADS=1 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048
+          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048 --omp-schedule dynamic
+          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism dp --router-mode router --tokens 2048
+          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 1 --dim 4 --hidden 8 --experts 4

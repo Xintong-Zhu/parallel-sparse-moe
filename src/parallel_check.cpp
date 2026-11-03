@@ -6,6 +6,7 @@
 #include "moe/serial.hpp"
 
 #include <mpi.h>
+#include <omp.h>
 
 #include <algorithm>
 #include <climits>
@@ -123,17 +124,23 @@ std::vector<float> forward_dp(const moe::MoEConfig& config, const moe::Model& mo
                               const std::vector<float>& tokens,
                               const std::vector<moe::RoutingDecision>& routes) {
   std::vector<float> output(tokens.size());
-  std::vector<float> partial0(config.dimension), partial1(config.dimension), scratch;
-  for (std::size_t local = 0; local < routes.size(); ++local) {
-    const float* token = tokens.data() + local * config.dimension;
-    const auto& route = routes[local];
-    moe::expert_forward_cpu(model.experts[route.expert_ids[0]], config, token,
-                            partial0.data(), scratch);
-    moe::expert_forward_cpu(model.experts[route.expert_ids[1]], config, token,
-                            partial1.data(), scratch);
-    for (std::uint32_t j = 0; j < config.dimension; ++j) {
-      output[local * config.dimension + j] =
-          route.gate_weights[0] * partial0[j] + route.gate_weights[1] * partial1[j];
+  // Each thread owns its scratch and writes only its assigned Token outputs.
+#pragma omp parallel
+  {
+    std::vector<float> partial0(config.dimension), partial1(config.dimension), scratch;
+#pragma omp for schedule(runtime)
+    for (std::ptrdiff_t item = 0; item < static_cast<std::ptrdiff_t>(routes.size()); ++item) {
+      const auto local = static_cast<std::size_t>(item);
+      const float* token = tokens.data() + local * config.dimension;
+      const auto& route = routes[local];
+      moe::expert_forward_cpu(model.experts[route.expert_ids[0]], config, token,
+                              partial0.data(), scratch);
+      moe::expert_forward_cpu(model.experts[route.expert_ids[1]], config, token,
+                              partial1.data(), scratch);
+      for (std::uint32_t j = 0; j < config.dimension; ++j) {
+        output[local * config.dimension + j] =
+            route.gate_weights[0] * partial0[j] + route.gate_weights[1] * partial1[j];
+      }
     }
   }
   return output;
@@ -171,13 +178,25 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
     throw std::runtime_error("invalid dispatched assignment: " + error);
   }
   Buffers returns(world);
-  std::vector<float> partial(config.dimension), scratch;
+  std::vector<float> computed(received.headers.size() * config.dimension);
+  // MPI calls stay outside OpenMP regions (MPI_THREAD_FUNNELED).
+#pragma omp parallel
+  {
+    std::vector<float> scratch;
+#pragma omp for schedule(runtime)
+    for (std::ptrdiff_t item = 0;
+         item < static_cast<std::ptrdiff_t>(received.headers.size()); ++item) {
+      const auto i = static_cast<std::size_t>(item);
+      const auto header = moe::unpack_header(received.headers[i]);
+      moe::expert_forward_cpu(model.experts[header.expert_id], config,
+                              received.token_values.data() + i * config.dimension,
+                              computed.data() + i * config.dimension, scratch);
+    }
+  }
   for (std::size_t i = 0; i < received.headers.size(); ++i) {
     const auto header = moe::unpack_header(received.headers[i]);
-    moe::expert_forward_cpu(model.experts[header.expert_id], config,
-                            received.token_values.data() + i * config.dimension,
-                            partial.data(), scratch);
-    append(returns[header.source_rank], received.headers[i], partial.data(),
+    append(returns[header.source_rank], received.headers[i],
+           computed.data() + i * config.dimension,
            config.dimension);
   }
   const auto returned = exchange(returns, config.dimension, MPI_COMM_WORLD);
@@ -241,6 +260,8 @@ int run(int argc, char** argv) {
   }
   try {
     const auto& config = parsed.config;
+    omp_set_schedule(config.omp_schedule == moe::OpenMPSchedule::kStatic
+                         ? omp_sched_static : omp_sched_dynamic, 1);
     const auto range = moe::contiguous_token_range(config.tokens, rank, world);
     const auto model = moe::generate_model(config);
     const auto tokens = moe::generate_tokens(config, range.begin, range.count);
