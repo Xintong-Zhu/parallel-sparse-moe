@@ -330,6 +330,7 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
   return output;
 }
 
+#ifndef MOE_CPU_PILOT
 int run(int argc, char** argv) {
   int provided = MPI_THREAD_SINGLE;
   MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
@@ -412,7 +413,136 @@ int run(int argc, char** argv) {
     return 1;
   }
 }
+#else
+int run_pilot(int argc, char** argv) {
+  int provided = MPI_THREAD_SINGLE;
+  MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
+  int rank = 0, world = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &world);
+  const auto parsed = moe::parse_command_line(std::vector<std::string>(argv + 1, argv + argc));
+  int valid = parsed.ok && !parsed.help_requested && provided >= MPI_THREAD_FUNNELED;
+  if (valid) {
+    const auto& c = parsed.config;
+    valid = c.expert_backend == moe::ExpertBackend::kCpu &&
+            c.placement == moe::Placement::kRoundRobin &&
+            (c.parallelism == moe::Parallelism::kExpertParallel ||
+             c.communication == moe::Communication::kAlltoallv);
+  }
+  MPI_Allreduce(MPI_IN_PLACE, &valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+  if (!valid) {
+    if (rank == 0) std::cerr << "Use valid CPU options and RR placement for the pilot.\n";
+    MPI_Finalize();
+    return 2;
+  }
+  try {
+    const auto& config = parsed.config;
+    omp_set_schedule(config.omp_schedule == moe::OpenMPSchedule::kStatic
+                         ? omp_sched_static : omp_sched_dynamic, 1);
+    const auto range = moe::contiguous_token_range(config.tokens, rank, world);
+    const auto model = config.parallelism == moe::Parallelism::kExpertParallel
+                           ? moe::generate_round_robin_partitioned_model(config, rank, world)
+                           : moe::generate_model(config);
+    const auto tokens = moe::generate_tokens(config, range.begin, range.count);
+    const auto trace = config.router_mode == moe::RouterMode::kTrace
+                           ? moe::generate_controlled_trace(config)
+                           : std::vector<moe::RoutingDecision>{};
+    const auto routes = local_routes(config, model, tokens, range, trace);
+
+    // The serial oracle runs only on rank 0 and entirely outside measurement.
+    std::vector<float> reference_output;
+    std::vector<int> counts, offsets;
+    if (rank == 0) {
+      const auto global_tokens = moe::generate_tokens(config, 0, config.tokens);
+      const auto* reference_trace =
+          config.router_mode == moe::RouterMode::kTrace ? &trace : nullptr;
+      reference_output = config.parallelism == moe::Parallelism::kExpertParallel
+                             ? moe::forward_serial(config, moe::generate_model(config),
+                                                   global_tokens, reference_trace).output
+                             : moe::forward_serial(config, model, global_tokens,
+                                                   reference_trace).output;
+      counts.resize(world);
+      offsets.resize(world);
+      for (int peer = 0; peer < world; ++peer) {
+        const auto peer_range = moe::contiguous_token_range(config.tokens, peer, world);
+        counts[peer] = mpi_count(peer_range.count * config.dimension);
+        offsets[peer] = mpi_count(peer_range.begin * config.dimension);
+      }
+    }
+    std::vector<float> expected(tokens.size());
+    float empty_receive = 0.0F;
+    MPI_Scatterv(rank == 0 ? reference_output.data() : nullptr,
+                 rank == 0 ? counts.data() : nullptr,
+                 rank == 0 ? offsets.data() : nullptr, MPI_FLOAT,
+                 expected.empty() ? &empty_receive : expected.data(),
+                 mpi_count(expected.size()),
+                 MPI_FLOAT, 0, MPI_COMM_WORLD);
+
+    auto forward = [&]() {
+      return config.parallelism == moe::Parallelism::kDataParallel
+                 ? forward_dp(config, model, tokens, routes)
+                 : forward_ep(config, model, tokens, routes, range, rank, world);
+    };
+    auto check_output = [&](const std::vector<float>& output) {
+      int local_ok = output.size() == expected.size();
+      if (local_ok && !output.empty()) {
+        local_ok = std::memcmp(output.data(), expected.data(),
+                               output.size() * sizeof(float)) == 0;
+      }
+      for (const float value : output) local_ok &= std::isfinite(value);
+      int all_ok = 0;
+      MPI_Allreduce(&local_ok, &all_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+      return all_ok != 0;
+    };
+
+    constexpr int warmups = 1;
+    constexpr int repeats = 5;
+    for (int i = 0; i < warmups; ++i) {
+      if (!check_output(forward())) {
+        if (rank == 0) std::cerr << "pilot warmup correctness: FAIL\n";
+        MPI_Finalize();
+        return 1;
+      }
+    }
+    for (int trial = 0; trial < repeats; ++trial) {
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double start = MPI_Wtime();
+      const auto output = forward();
+      const double local_seconds = MPI_Wtime() - start;
+      double max_seconds = 0.0;
+      MPI_Reduce(&local_seconds, &max_seconds, 1, MPI_DOUBLE, MPI_MAX, 0,
+                 MPI_COMM_WORLD);
+      const bool passed = check_output(output);
+      if (rank == 0) {
+        std::cout << "pilot,trial=" << trial << ",parallelism="
+                  << moe::to_string(config.parallelism) << ",communication="
+                  << moe::to_string(config.communication) << ",tokens=" << config.tokens
+                  << ",experts=" << config.experts << ",ranks=" << world
+                  << ",threads=" << omp_get_max_threads()
+                  << ",end_to_end_seconds=" << max_seconds
+                  << ",bitwise_ok=" << (passed ? 1 : 0) << '\n';
+      }
+      if (!passed) {
+        MPI_Finalize();
+        return 1;
+      }
+    }
+    MPI_Finalize();
+    return 0;
+  } catch (const std::exception& error) {
+    std::cerr << "rank " << rank << ": " << error.what() << '\n';
+    MPI_Abort(MPI_COMM_WORLD, 1);
+    return 1;
+  }
+}
+#endif
 
 }  // namespace
 
-int main(int argc, char** argv) { return run(argc, argv); }
+int main(int argc, char** argv) {
+#ifdef MOE_CPU_PILOT
+  return run_pilot(argc, argv);
+#else
+  return run(argc, argv);
+#endif
+}

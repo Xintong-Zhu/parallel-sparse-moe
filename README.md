@@ -507,7 +507,7 @@ group assignments by Expert
 and call a shared micro-batch kernel (currently `MB=8`); the unit test compares
 it bitwise with the per-Token scalar kernel. In DP/EP, OpenMP distributes
 disjoint Expert micro-batch tasks across threads. A production benchmark,
-tuned task block size, load-aware placement, and timed repeated runs remain
+tuned task block size, load-aware placement, and formal repeated runs remain
 to be implemented. The current `moe_serial` `forward_seconds` includes
 allocation and is only a functional
 diagnostic, not yet a formal benchmark result.
@@ -518,6 +518,26 @@ call). Each is the maximum elapsed time across ranks. The forward diagnostic
 includes temporary allocations and validation collectives. The serial oracle
 is executed after both measurements. These numbers help spot gross regressions
 but do not meet the repeated-measurement contract for performance figures.
+
+### CPU pilot measurements
+
+`moe_cpu_pilot` runs one warmup and five measured forward calls. Rank 0 builds
+the global serial oracle outside the timed loop, scatters expected local
+outputs, and every rank checks bitwise equality after each call. Each printed
+trial records the maximum forward time across ranks and `bitwise_ok`. EP holds
+only its owned Expert weights during the measured calls. Run it inside a Vanda
+allocation after loading the same modules as the checker:
+
+```bash
+OMP_NUM_THREADS=2 mpirun --map-by slot:PE=2 --bind-to core -np 2 \
+  ./build/moe_cpu_pilot --parallelism ep --communication p2p \
+  --router-mode trace --skew uniform --tokens 2048
+```
+
+This is a pilot to choose workload size and check repeatability. It includes
+temporary allocations and protocol validation collectives inside each forward
+call; the final benchmark will separate phases and reuse buffers. Do not put
+pilot times into the formal scaling figures.
 
 The checkpoint can also run its Expert micro-batch tasks with OpenMP. Set
 `OMP_NUM_THREADS` and choose `--omp-schedule static|dynamic`; each thread has
