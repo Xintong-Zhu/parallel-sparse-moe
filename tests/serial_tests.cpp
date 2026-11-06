@@ -55,6 +55,19 @@ int main() {
   ok &= check(model_a.experts[0].w1 == model_b.experts[0].w1 &&
                   model_a.experts[0].w2 == model_b.experts[0].w2,
               "expert weights are deterministic");
+  for (int rank = 0; rank < 8; ++rank) {
+    const auto owned = moe::generate_round_robin_partitioned_model(config, rank, 8);
+    ok &= check(owned.router_weights == model_a.router_weights,
+                "partitioned model preserves router weights");
+    for (std::size_t expert = 0; expert < config.experts; ++expert) {
+      const bool local = static_cast<int>(expert % 8) == rank;
+      ok &= check(local ? (owned.experts[expert].w1 == model_a.experts[expert].w1 &&
+                           owned.experts[expert].w2 == model_a.experts[expert].w2)
+                        : (owned.experts[expert].w1.empty() &&
+                           owned.experts[expert].w2.empty()),
+                  "partitioned model stores only owned Expert weights");
+    }
+  }
 
   const auto trace = moe::generate_controlled_trace(config);
   const auto histogram = moe::routing_histogram(trace, config.experts);

@@ -357,21 +357,35 @@ int run(int argc, char** argv) {
     const auto& config = parsed.config;
     omp_set_schedule(config.omp_schedule == moe::OpenMPSchedule::kStatic
                          ? omp_sched_static : omp_sched_dynamic, 1);
+    const double setup_start = MPI_Wtime();
     const auto range = moe::contiguous_token_range(config.tokens, rank, world);
-    const auto model = moe::generate_model(config);
+    const auto model = config.parallelism == moe::Parallelism::kExpertParallel
+                           ? moe::generate_round_robin_partitioned_model(config, rank, world)
+                           : moe::generate_model(config);
     const auto tokens = moe::generate_tokens(config, range.begin, range.count);
     const auto trace = config.router_mode == moe::RouterMode::kTrace
                            ? moe::generate_controlled_trace(config)
                            : std::vector<moe::RoutingDecision>{};
     const auto routes = local_routes(config, model, tokens, range, trace);
+    const double setup_seconds = MPI_Wtime() - setup_start;
+    MPI_Barrier(MPI_COMM_WORLD);
+    const double forward_start = MPI_Wtime();
     const auto output = config.parallelism == moe::Parallelism::kDataParallel
                             ? forward_dp(config, model, tokens, routes)
                             : forward_ep(config, model, tokens, routes, range, rank, world);
+    const double forward_seconds = MPI_Wtime() - forward_start;
+    double setup_max = 0.0, forward_max = 0.0;
+    MPI_Reduce(&setup_seconds, &setup_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&forward_seconds, &forward_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     // Generate the same global input on every rank solely for this small correctness gate.
     const auto all_tokens = moe::generate_tokens(config, 0, config.tokens);
-    const auto reference = moe::forward_serial(
-        config, model, all_tokens,
-        config.router_mode == moe::RouterMode::kTrace ? &trace : nullptr);
+    const auto* reference_trace =
+        config.router_mode == moe::RouterMode::kTrace ? &trace : nullptr;
+    const auto reference = config.parallelism == moe::Parallelism::kExpertParallel
+                               ? moe::forward_serial(config, moe::generate_model(config),
+                                                     all_tokens, reference_trace)
+                               : moe::forward_serial(config, model, all_tokens,
+                                                     reference_trace);
     valid = output.size() == tokens.size();
     if (valid) {
       const float* expected = reference.output.data() + range.begin * config.dimension;
@@ -387,6 +401,8 @@ int run(int argc, char** argv) {
                 << (passed ? "PASS" : "FAIL") << " (P=" << world
                 << ", N=" << config.tokens
                 << ", communication=" << moe::to_string(config.communication) << ")\n";
+      std::cout << "diagnostic_setup_seconds_max=" << setup_max << '\n'
+                << "diagnostic_forward_seconds_max=" << forward_max << '\n';
     }
     MPI_Finalize();
     return passed ? 0 : 1;

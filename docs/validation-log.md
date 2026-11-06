@@ -16,3 +16,13 @@ This log records observed correctness checks. It is not a performance dataset.
   `P=2`, `N=2048`, `OMP_NUM_THREADS=2`.
 - This check validates launch and output correctness for those cases. No timed
   repetitions or scaling claims were made.
+
+## 2026-11-06: Vanda P2P CPU check
+
+- Target commit: `273e5cc`. The user confirmed its GitHub Actions run passed.
+- On a Vanda two-process, two-thread allocation, the user reported `PASS` for
+  EP uniform trace with Alltoallv, EP uniform trace with P2P, EP moderate trace
+  with P2P and dynamic OpenMP schedule (all `N=2048`), and a P2P case with
+  `N=1`, `d=4`, `h=8`, `E=4`. The exact compute-node `HEAD` and raw terminal log
+  were not retained in the conversation.
+- These are correctness checks. No timing or scaling data were collected.

@@ -498,17 +498,26 @@ This checkpoint intentionally accepts only CPU, round-robin placement, and
 `N <= 8192`. EP can use `--communication alltoallv|p2p`; DP has no exchange and
 uses the default `alltoallv` setting. The P2P variant exchanges counts, posts
 nonblocking receives and sends for the two payload arrays, then waits for all
-requests. Dispatch and return use distinct tags. Every rank creates the complete model
-and global serial reference for verification, so this is **not** the final
-memory-scalable EP implementation or a performance benchmark. Do not use its
-runtime in scaling figures. Serial, DP, and EP now group assignments by Expert
+requests. Dispatch and return use distinct tags. EP now generates only the
+Expert weights owned by its MPI rank; Router weights remain replicated. The
+correctness program separately creates a complete model and global serial
+reference after the parallel forward call, so it is still **not** a performance
+benchmark. Do not use its runtime in scaling figures. Serial, DP, and EP now
+group assignments by Expert
 and call a shared micro-batch kernel (currently `MB=8`); the unit test compares
 it bitwise with the per-Token scalar kernel. In DP/EP, OpenMP distributes
-disjoint Expert micro-batch tasks across threads. Model partitioning, tuned
-task block size, load-aware placement, and timed repeated runs remain to
-be implemented. The current
-`moe_serial` `forward_seconds` includes allocation and is only a functional
+disjoint Expert micro-batch tasks across threads. A production benchmark,
+tuned task block size, load-aware placement, and timed repeated runs remain
+to be implemented. The current `moe_serial` `forward_seconds` includes
+allocation and is only a functional
 diagnostic, not yet a formal benchmark result.
+
+The checker prints `diagnostic_setup_seconds_max` (model, input, trace, route
+generation) and `diagnostic_forward_seconds_max` (one synchronized forward
+call). Each is the maximum elapsed time across ranks. The forward diagnostic
+includes temporary allocations and validation collectives. The serial oracle
+is executed after both measurements. These numbers help spot gross regressions
+but do not meet the repeated-measurement contract for performance figures.
 
 The checkpoint can also run its Expert micro-batch tasks with OpenMP. Set
 `OMP_NUM_THREADS` and choose `--omp-schedule static|dynamic`; each thread has

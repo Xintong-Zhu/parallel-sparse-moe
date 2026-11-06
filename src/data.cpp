@@ -113,7 +113,8 @@ std::vector<double> trace_shares(const MoEConfig& config) {
 
 }  // namespace
 
-Model generate_model(const MoEConfig& config) {
+static Model generate_model_impl(const MoEConfig& config, int rank, int world_size,
+                                 bool partitioned) {
   const std::size_t d = config.dimension;
   const std::size_t h = config.hidden_dimension;
   const std::size_t e = config.experts;
@@ -130,6 +131,9 @@ Model generate_model(const MoEConfig& config) {
 
   model.experts.resize(e);
   for (std::size_t expert = 0; expert < e; ++expert) {
+    if (partitioned && static_cast<int>(expert % static_cast<std::size_t>(world_size)) != rank) {
+      continue;
+    }
     auto& weights = model.experts[expert];
     weights.w1.resize(d * h);
     weights.w2.resize(h * d);
@@ -145,6 +149,18 @@ Model generate_model(const MoEConfig& config) {
     }
   }
   return model;
+}
+
+Model generate_model(const MoEConfig& config) {
+  return generate_model_impl(config, 0, 1, false);
+}
+
+Model generate_round_robin_partitioned_model(const MoEConfig& config, int rank,
+                                              int world_size) {
+  if (world_size <= 0 || rank < 0 || rank >= world_size) {
+    throw std::invalid_argument("invalid rank or world size for partitioned model");
+  }
+  return generate_model_impl(config, rank, world_size, true);
 }
 
 std::vector<float> generate_tokens(const MoEConfig& config, std::uint64_t first_token,

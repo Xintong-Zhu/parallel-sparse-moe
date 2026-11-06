@@ -25,6 +25,10 @@ struct RoutingDecision {
 
 // Every value is a function of its seed and global index, never MPI rank.
 Model generate_model(const MoEConfig& config);
+// Router weights are replicated; only Experts with expert_id % world_size == rank
+// receive weight arrays. Empty Expert entries must never be evaluated locally.
+Model generate_round_robin_partitioned_model(const MoEConfig& config, int rank,
+                                              int world_size);
 std::vector<float> generate_tokens(const MoEConfig& config,
                                    std::uint64_t first_token,
                                    std::uint64_t token_count);
