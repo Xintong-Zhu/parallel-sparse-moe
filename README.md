@@ -556,6 +556,9 @@ After timing each trial, every rank checks its output bitwise against a serial
 oracle built outside the timed region. Only `bitwise_ok=1` trials are eligible
 for analysis. The program prints `benchmark,trial=...` and the per-phase rank
 maxima. Phase maxima may come from different ranks and are not additive.
+Before timing, rank 0 also prints the exact configuration and seeds, the
+realized per-Expert assignment histogram, and the assignment totals per rank
+under round-robin placement. Retain these lines with the raw trials.
 
 The timed region includes per-forward temporary allocations, packing,
 communication, Expert computation, unpacking, and combining. Input/model/trace
@@ -565,6 +568,9 @@ every point of a scaling series. Treat this as a candidate formal timing path
 until it passes Vanda correctness and repeatability checks at the intended
 resource counts. Record the Git commit, allocation, compiler modules, seeds,
 rank/thread layout, and all five raw trials alongside the output.
+`expert_compute_seconds` includes Expert grouping, task creation and temporary
+buffers as well as FFN work. The communication-stage timers include message
+packing and count exchange, so they are not pure network latency.
 
 ```bash
 OMP_NUM_THREADS=2 mpirun --map-by slot:PE=2 --bind-to core -np 2 \

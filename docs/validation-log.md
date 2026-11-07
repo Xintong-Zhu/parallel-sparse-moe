@@ -90,3 +90,21 @@ This log records observed correctness checks. It is not a performance dataset.
   medians are 0.00117653, 0.00431691, and 0.0180814 s. All pass correctness;
   the original `N=2048` run on `c3144fa` is retained separately for provenance
   but should not be mixed into the same-protocol comparison.
+
+## 2026-11-07: Vanda CPU benchmark checkpoint at E=16 and E=256
+
+- On `CN-152`, the user ran compute-node commit `1036672` with 2 MPI ranks,
+  2 OpenMP threads each, CPU EP, P2P, `N=32768`, controlled uniform trace,
+  and both `E=16` and `E=256`. All ten measured trials had `bitwise_ok=1`.
+  Raw phase timings are in
+  `results/raw/vanda-cpu-bench-2026-11-07-cn152-p2x2-n32768.csv`.
+- Median end-to-end times were 0.268495 s at E=16 and 0.272678 s at E=256,
+  a 1.6% difference at this single resource layout. Expert compute-stage
+  medians were 0.225531 s and 0.231224 s, respectively. This stage includes
+  grouping/tasks and temporary allocations, not only FFN arithmetic.
+- Return-communication stage values varied substantially (E=16:
+  0.00986646–0.0362627 s; E=256: 0.00981214–0.0232019 s). All values are
+  maxima across ranks for their respective phases; do not add phase maxima
+  to explain the end-to-end maximum. The benchmark prints no realized Expert
+  histogram yet, so these are size/implementation pilots, not the final
+  placement or scaling dataset.

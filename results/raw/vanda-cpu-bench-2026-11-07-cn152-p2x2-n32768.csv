@@ -1,0 +1,19 @@
+# Source: user-pasted Vanda terminal output on 2026-11-07 (Asia/Shanghai)
+# Node: CN-152; compute-node git HEAD: 1036672 (confirmed by user)
+# Allocation: 2 MPI ranks x 2 OpenMP threads; E=16 and E=256; N=32768
+# Workload: CPU EP, P2P, controlled uniform trace, d=128, h=256, Top-2, RR placement
+# Default seeds: model=42, input=314159, routing=271828, calibration=161803
+# Three warmups and five measured forward calls; all output checks bitwise_ok=1
+# Per-phase rank maxima can come from different ranks and need not add to end-to-end max.
+# 'expert_compute_seconds' includes task grouping and temporary buffers, not FFN arithmetic alone.
+trial,parallelism,communication,tokens,experts,ranks,threads,end_to_end_seconds,dispatch_pack_seconds,dispatch_comm_seconds,expert_compute_seconds,return_pack_seconds,return_comm_seconds,validation_unpack_seconds,combine_seconds,bitwise_ok
+0,ep,p2p,32768,16,2,2,0.283556,0.00920166,0.0128057,0.240714,0.0103202,0.0362627,0.00378995,0.00185849,1
+1,ep,p2p,32768,16,2,2,0.268495,0.00897781,0.0139665,0.225531,0.0100758,0.0281998,0.00384976,0.00187724,1
+2,ep,p2p,32768,16,2,2,0.264115,0.00899782,0.0140571,0.221275,0.0099249,0.00986646,0.00382783,0.00182945,1
+3,ep,p2p,32768,16,2,2,0.266956,0.00906489,0.0140981,0.224018,0.0102851,0.0163346,0.00368149,0.00186194,1
+4,ep,p2p,32768,16,2,2,0.272383,0.00903693,0.0141037,0.229523,0.0102211,0.0103414,0.00369784,0.00187584,1
+0,ep,p2p,32768,256,2,2,0.271292,0.00819306,0.0131872,0.228574,0.0102507,0.013412,0.00399405,0.00290635,1
+1,ep,p2p,32768,256,2,2,0.272678,0.00815898,0.0131129,0.231224,0.0104329,0.0220591,0.00392365,0.00289676,1
+2,ep,p2p,32768,256,2,2,0.278349,0.00816263,0.013225,0.236044,0.0099543,0.0232019,0.00385518,0.00290227,1
+3,ep,p2p,32768,256,2,2,0.278049,0.00813339,0.0130988,0.233785,0.014135,0.00981214,0.00407215,0.002929,1
+4,ep,p2p,32768,256,2,2,0.267408,0.0078737,0.0114641,0.226892,0.0100351,0.0184113,0.00393801,0.0023211,1

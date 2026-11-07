@@ -505,11 +505,43 @@ int run_measurement(int argc, char** argv) {
       const auto global_tokens = moe::generate_tokens(config, 0, config.tokens);
       const auto* reference_trace =
           config.router_mode == moe::RouterMode::kTrace ? &trace : nullptr;
-      reference_output = config.parallelism == moe::Parallelism::kExpertParallel
-                             ? moe::forward_serial(config, moe::generate_model(config),
-                                                   global_tokens, reference_trace).output
-                             : moe::forward_serial(config, model, global_tokens,
-                                                   reference_trace).output;
+      const auto reference = config.parallelism == moe::Parallelism::kExpertParallel
+                                 ? moe::forward_serial(config, moe::generate_model(config),
+                                                       global_tokens, reference_trace)
+                                 : moe::forward_serial(config, model, global_tokens,
+                                                       reference_trace);
+      reference_output = reference.output;
+      const auto histogram = moe::routing_histogram(reference.routes, config.experts);
+      std::vector<std::uint64_t> owner_counts(static_cast<std::size_t>(world), 0);
+      for (std::size_t expert = 0; expert < histogram.size(); ++expert) {
+        owner_counts[expert % static_cast<std::size_t>(world)] += histogram[expert];
+      }
+      const char* label = benchmark ? "benchmark" : "pilot";
+      std::cout << label << "_config,tokens=" << config.tokens
+                << ",dimension=" << config.dimension
+                << ",hidden=" << config.hidden_dimension
+                << ",experts=" << config.experts
+                << ",ranks=" << world
+                << ",threads=" << omp_get_max_threads()
+                << ",parallelism=" << moe::to_string(config.parallelism)
+                << ",communication=" << moe::to_string(config.communication)
+                << ",router_mode=" << moe::to_string(config.router_mode)
+                << ",skew=" << moe::to_string(config.skew)
+                << ",placement=" << moe::to_string(config.placement)
+                << ",omp_schedule=" << moe::to_string(config.omp_schedule)
+                << ",model_seed=" << config.model_seed
+                << ",input_seed=" << config.input_seed
+                << ",routing_seed=" << config.routing_seed
+                << ",calibration_seed=" << config.calibration_seed << '\n';
+      std::cout << label << "_expert_histogram=";
+      for (std::size_t expert = 0; expert < histogram.size(); ++expert) {
+        std::cout << (expert == 0 ? "" : ",") << histogram[expert];
+      }
+      std::cout << '\n' << label << "_rank_assignment_histogram=";
+      for (std::size_t peer = 0; peer < owner_counts.size(); ++peer) {
+        std::cout << (peer == 0 ? "" : ",") << owner_counts[peer];
+      }
+      std::cout << '\n';
       counts.resize(world);
       offsets.resize(world);
       for (int peer = 0; peer < world; ++peer) {
