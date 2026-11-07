@@ -73,6 +73,11 @@ mpirun --map-by slot:PE=1 --bind-to core -np 256 \
   ./build/moe_launch_probe --expect-threads 1 \
   > "$output_dir/256_rank_probe.txt" 2>&1
 
+printf '%s\n' 'series,trial,parallelism,communication,tokens,experts,ranks,threads,end_to_end_seconds,dispatch_pack_seconds,dispatch_comm_seconds,expert_compute_seconds,return_pack_seconds,return_comm_seconds,validation_unpack_seconds,combine_seconds,bitwise_ok' \
+  > "$output_dir/all_trials.csv"
+printf '%s\n' 'series,ranks,tokens,median_end_to_end_seconds' \
+  > "$output_dir/medians.csv"
+
 run_point() {
   local kind=$1 ranks=$2 tokens=$3
   local log_file="$output_dir/${kind}-p${ranks}.txt"
@@ -85,6 +90,22 @@ run_point() {
   grep -q '^benchmark_rank_assignment_histogram=' "$log_file"
   awk '/^benchmark,trial=/{n++; if ($0 !~ /,bitwise_ok=1$/) bad=1}
        END {if (n != 5 || bad) exit 1}' "$log_file"
+  awk -F, -v series="$kind" '/^benchmark,trial=/{
+    printf "%s", series
+    for (i=2; i<=NF; ++i) {
+      split($i, item, "=")
+      printf ",%s", item[2]
+    }
+    printf "\n"
+  }' "$log_file" >> "$output_dir/all_trials.csv"
+  median=$(awk -F, '/^benchmark,trial=/{
+    for (i=2; i<=NF; ++i) if ($i ~ /^end_to_end_seconds=/) {
+      split($i, item, "=")
+      print item[2]
+    }
+  }' "$log_file" | sort -g | sed -n '3p')
+  printf '%s,%s,%s,%s\n' "$kind" "$ranks" "$tokens" "$median" \
+    >> "$output_dir/medians.csv"
   echo "PASS $kind: P=$ranks N=$tokens ($log_file)"
 }
 
@@ -97,4 +118,4 @@ for ranks in 1 2 4 8 16 32 64 128; do
   run_point weak "$ranks" "$((4096 * ranks))"
 done
 
-echo "All 18 strong/weak points passed. Raw outputs: $output_dir"
+echo "All 18 strong/weak points passed. Summaries and raw outputs: $output_dir"

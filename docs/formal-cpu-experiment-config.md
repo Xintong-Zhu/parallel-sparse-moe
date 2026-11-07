@@ -70,7 +70,10 @@ The 18 point logs, node list, modules, PBS nodefile, and Git commit are written
 under ignored `private/formal-cpu-<jobid>/`. Every point is required to print
 five bitwise-correct trials and the realized Expert and rank loads. PBS stdout
 is also ignored by Git; do not include these raw logs in the final submission
-package. Convert them to compact CSV evidence and figures after validation.
+package. The runner also writes `all_trials.csv` and `medians.csv` in that
+private directory, generated only from points with five passing trials. Use
+them for initial review, then copy vetted, compact evidence and figures into
+the report workflow.
 
 Submit from the repository's Vanda login-node checkout after pulling the
 intended commit:
