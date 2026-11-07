@@ -1,0 +1,19 @@
+# Source: user-pasted Vanda terminal output on 2026-11-07 (Asia/Shanghai)
+# GPU: NVIDIA A40; visible_devices=1; CUDA runtime=12040
+# Compute-node hostname and git HEAD were not included in the pasted output; target commit c3144fa
+# Workload: N=2048, E=16, d=128, h=256, Top-2, uniform controlled trace, default seeds
+# Expert histogram: 256 assignments per Expert (16 Experts)
+# One-time weight H2D upload: 0.00163943 seconds (outside trials)
+# GPU correctness: PASS; all GPU trials have max_abs_error=0 and relative_l2_error=0
+# Exploratory checkpoint only: GPU buffers preallocated; CPU serial forward allocates per call.
+backend,trial,tokens,experts,host_pack_seconds,h2d_seconds,kernel_seconds,d2h_seconds,host_combine_seconds,end_to_end_seconds,serial_seconds,max_abs_error,relative_l2_error,correctness
+gpu,0,2048,16,0.00018322,0.000230037,0.000443552,0.000252408,0.000193732,0.00131066,,0,0,PASS
+gpu,1,2048,16,0.000183125,0.000223781,0.000442368,0.000252858,0.000209341,0.0013191,,0,0,PASS
+gpu,2,2048,16,0.000184892,0.000230526,0.000441344,0.000247091,0.000211553,0.00132367,,0,0,PASS
+gpu,3,2048,16,0.000182575,0.000223349,0.00044032,0.000246195,0.000209295,0.00131029,,0,0,PASS
+gpu,4,2048,16,0.000183917,0.000228163,0.000441344,0.000246382,0.000215132,0.00132208,,0,0,PASS
+cpu,0,2048,16,,,,,,,0.0468374,0,0,PASS
+cpu,1,2048,16,,,,,,,0.0475947,0,0,PASS
+cpu,2,2048,16,,,,,,,0.0478187,0,0,PASS
+cpu,3,2048,16,,,,,,,0.0420761,0,0,PASS
+cpu,4,2048,16,,,,,,,0.0302744,0,0,PASS
