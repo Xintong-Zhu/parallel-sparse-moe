@@ -108,3 +108,11 @@ This log records observed correctness checks. It is not a performance dataset.
   to explain the end-to-end maximum. The benchmark prints no realized Expert
   histogram yet, so these are size/implementation pilots, not the final
   placement or scaling dataset.
+- In the same `CN-152` allocation and binary, the user then ran CPU EP with
+  Alltoallv, `E=256`, `N=131072`, 2 MPI ranks and 2 OpenMP threads. All five
+  trials passed bitwise checks. End-to-end values ranged from 0.743594 to
+  0.763439 s, with median 0.755526 s; the median Expert compute stage was
+  0.607352 s. Raw values are in
+  `results/raw/vanda-cpu-bench-2026-11-07-cn152-p2x2-n131072-e256.csv`.
+  This is a stable pilot for a possible strong-scaling global Token count;
+  the one-rank baseline and larger-rank behavior still need checking.
