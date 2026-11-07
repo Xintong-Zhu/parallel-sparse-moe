@@ -73,6 +73,7 @@ results/raw/*
 !results/raw/*.csv
 results/processed/*
 !results/processed/.gitkeep
+!results/processed/*.csv
 figures/*
 !figures/.gitkeep
 private/

@@ -85,3 +85,16 @@ qsub scripts/vanda_cpu_formal.pbs
 The runner uses one code revision for the full strong and weak series. If the
 request is rejected by PBS or a 256-rank point fails, inspect the job output
 and the private logs before changing resources or workloads.
+
+After the complete job has passed, validate all 18 point logs and generate a
+compact summary with the standard-library-only analysis script:
+
+```bash
+python3 scripts/analyze_cpu_formal.py private/formal-cpu-<jobid> \
+  --output results/processed/vanda-cpu-formal-<jobid>.csv
+```
+
+The analysis script requires five bitwise-correct trials at every point, exact
+frozen settings and realized uniform loads, four same-model nodes, and passing
+four-node/256-rank launch probes. It derives medians, strong speedup and
+efficiency, and weak efficiency from the same-series one-rank baselines.
