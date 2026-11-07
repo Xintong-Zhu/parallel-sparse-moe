@@ -116,3 +116,11 @@ This log records observed correctness checks. It is not a performance dataset.
   `results/raw/vanda-cpu-bench-2026-11-07-cn152-p2x2-n131072-e256.csv`.
   This is a stable pilot for a possible strong-scaling global Token count;
   the one-rank baseline and larger-rank behavior still need checking.
+- On the same `CN-152` allocation and binary, the user ran the matching
+  `N=131072`, `E=256`, Alltoallv EP case at 1 MPI rank × 1 OpenMP thread. All
+  five trials passed bitwise checks. The end-to-end median was 2.60025 s
+  (range 2.5312–2.65165 s). Compared with the 2-rank × 2-thread median
+  0.755526 s, the exploratory four-core speedup is 3.44 and efficiency is
+  about 86.0%, using the one-core EP forward as the baseline. P=1 exchange
+  stages are local copies/packing rather than network traffic. Raw values are
+  in `results/raw/vanda-cpu-bench-2026-11-07-cn152-p1x1-n131072-e256.csv`.
