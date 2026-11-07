@@ -1,0 +1,21 @@
+# Source: user-pasted terminal output on 2026-11-07 (Asia/Shanghai)
+# Node: GN-A40-047; compute-node git HEAD 79234ab (confirmed by user)
+# CPU model: Intel(R) Xeon(R) Platinum 8452Y (user-reported lscpu output)
+# Allocation: 1:ncpus=36:mpiprocs=2:ompthreads=2:mem=250GB; trials use 1 thread/rank
+# Workload: CPU EP, Alltoallv, E=256, d=128, h=256, Top-2, RR placement, controlled uniform trace
+# Default seeds: model=42, input=314159, routing=271828, calibration=161803
+# Weak scaling: 4096 Tokens/rank; P=1 has N=4096, P=2 has N=8192
+# Realized load: P=1 has 32 assignments/Expert and 8192 assignments/rank;
+# P=2 has 64 assignments/Expert and 8192 assignments/rank.
+# Three warmups, five trials; all bitwise_ok=1. Phase rank maxima are not additive.
+trial,parallelism,communication,tokens,experts,ranks,threads,end_to_end_seconds,dispatch_pack_seconds,dispatch_comm_seconds,expert_compute_seconds,return_pack_seconds,return_comm_seconds,validation_unpack_seconds,combine_seconds,bitwise_ok
+0,ep,alltoallv,4096,256,1,1,0.0808106,0.000770492,0.000786937,0.0766045,0.000882723,0.000876791,0.000549836,0.000326455,1
+1,ep,alltoallv,4096,256,1,1,0.0823059,0.000735598,0.000775021,0.0783558,0.000780171,0.000793275,0.000548572,0.000305424,1
+2,ep,alltoallv,4096,256,1,1,0.0746002,0.000699038,0.000771991,0.0706998,0.000759114,0.0007996,0.000552948,0.000305831,1
+3,ep,alltoallv,4096,256,1,1,0.0790673,0.00069747,0.000776196,0.0751716,0.000761714,0.00079726,0.000544413,0.000307021,1
+4,ep,alltoallv,4096,256,1,1,0.0772214,0.000692971,0.000773121,0.0733456,0.000750296,0.000791515,0.000551304,0.000304931,1
+0,ep,alltoallv,8192,256,2,1,0.0822911,0.00180944,0.00327916,0.0731812,0.00211223,0.00403045,0.000624925,0.00101384,1
+1,ep,alltoallv,8192,256,2,1,0.083977,0.00181131,0.0032689,0.0735413,0.00213798,0.00862151,0.000630655,0.00102911,1
+2,ep,alltoallv,8192,256,2,1,0.0847543,0.0018175,0.00328407,0.0743488,0.00211909,0.0054612,0.000624061,0.00102588,1
+3,ep,alltoallv,8192,256,2,1,0.0858595,0.00180849,0.00326588,0.0753985,0.00214784,0.00829074,0.000631059,0.00101943,1
+4,ep,alltoallv,8192,256,2,1,0.0826656,0.00181133,0.00326909,0.0735376,0.00210984,0.00450262,0.000620036,0.00102293,1

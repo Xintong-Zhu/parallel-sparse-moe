@@ -124,3 +124,26 @@ This log records observed correctness checks. It is not a performance dataset.
   about 86.0%, using the one-core EP forward as the baseline. P=1 exchange
   stages are local copies/packing rather than network traffic. Raw values are
   in `results/raw/vanda-cpu-bench-2026-11-07-cn152-p1x1-n131072-e256.csv`.
+
+## 2026-11-07: Vanda weak-scaling start on GN-A40-047
+
+- The user confirmed compute-node commit `79234ab` and CPU model Intel Xeon
+  Platinum 8452Y. PBS assigned `GN-A40-047` as a CPU-only job with 36 cores,
+  2 MPI slots, and no GPU requested. This is a different node from the
+  `CN-152` strong-scaling pilots; its CPU model has not been compared with
+  `CN-152`.
+- With CPU EP, Alltoallv, controlled uniform trace and E=256, the user ran
+  1 rank × 1 thread at N=4096 and 2 ranks × 1 thread at N=8192: 4096 Tokens
+  per rank. All ten measured trials had `bitwise_ok=1`.
+- The program printed 32 assignments per Expert and 8192 per rank at P=1,
+  then 64 assignments per Expert and 8192 per rank at P=2. This is the realized
+  Top-2 load, not just the requested distribution.
+- Median end-to-end times were 0.0790673 s at P=1 and 0.083977 s at P=2,
+  giving exploratory weak-scaling efficiency 0.9415 when defined as T1/T2.
+  The P=1 range was 0.0746002–0.0823059 s, so the short baseline has some
+  variability. Raw data are in
+  `results/raw/vanda-cpu-weak-pilot-2026-11-07-gn-a40-047.csv`.
+- The pilot supports freezing 4096 Tokens per rank for the planned weak curve;
+  the protocol and the fixed N=131072 strong curve are recorded in
+  `docs/formal-cpu-experiment-config.md`. Formal measurements still require
+  a homogeneous multi-node allocation and a 256-rank pilot.
