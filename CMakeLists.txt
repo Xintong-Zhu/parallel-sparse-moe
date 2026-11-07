@@ -39,6 +39,10 @@ add_executable(moe_cpu_pilot src/parallel_check.cpp)
 target_compile_definitions(moe_cpu_pilot PRIVATE MOE_CPU_PILOT=1)
 target_link_libraries(moe_cpu_pilot PRIVATE moe_core MPI::MPI_CXX OpenMP::OpenMP_CXX)
 
+add_executable(moe_cpu_bench src/parallel_check.cpp)
+target_compile_definitions(moe_cpu_bench PRIVATE MOE_CPU_BENCH=1)
+target_link_libraries(moe_cpu_bench PRIVATE moe_core MPI::MPI_CXX OpenMP::OpenMP_CXX)
+
 if(MOE_ENABLE_CUDA)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)

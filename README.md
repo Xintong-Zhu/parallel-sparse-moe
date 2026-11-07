@@ -513,7 +513,7 @@ group assignments by Expert
 and call a shared micro-batch kernel (currently `MB=8`); the unit test compares
 it bitwise with the per-Token scalar kernel. In DP/EP, OpenMP distributes
 disjoint Expert micro-batch tasks across threads. A production benchmark,
-tuned task block size, load-aware placement, and formal repeated runs remain
+tuned task block size, and load-aware placement remain
 to be implemented. The current `moe_serial` `forward_seconds` includes
 allocation and is only a functional
 diagnostic, not yet a formal benchmark result.
@@ -546,6 +546,31 @@ This is a pilot to choose workload size and check repeatability. It includes
 temporary allocations and protocol validation collectives inside each forward
 call; the final benchmark will separate phases and reuse buffers. Do not put
 pilot times into the formal scaling figures.
+
+### CPU benchmark checkpoint
+
+`moe_cpu_bench` uses the same implementation and output check as the pilot,
+with three warmups and five timed trials. It removes the two EP validation
+collectives from each forward call; local packet and return-slot checks remain.
+After timing each trial, every rank checks its output bitwise against a serial
+oracle built outside the timed region. Only `bitwise_ok=1` trials are eligible
+for analysis. The program prints `benchmark,trial=...` and the per-phase rank
+maxima. Phase maxima may come from different ranks and are not additive.
+
+The timed region includes per-forward temporary allocations, packing,
+communication, Expert computation, unpacking, and combining. Input/model/trace
+generation, the serial oracle, MPI barriers before each trial, and output
+checks after each trial are excluded. Use the same executable and options at
+every point of a scaling series. Treat this as a candidate formal timing path
+until it passes Vanda correctness and repeatability checks at the intended
+resource counts. Record the Git commit, allocation, compiler modules, seeds,
+rank/thread layout, and all five raw trials alongside the output.
+
+```bash
+OMP_NUM_THREADS=2 mpirun --map-by slot:PE=2 --bind-to core -np 2 \
+  ./build/moe_cpu_bench --parallelism ep --communication p2p \
+  --router-mode trace --skew uniform --tokens 2048
+```
 
 ### Single-GPU Expert FFN checkpoint
 

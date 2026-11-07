@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   }
   const auto& config = parsed.config;
   if (config.expert_backend != moe::ExpertBackend::kCpu) {
-    std::cerr << "Error: the CUDA Expert backend has not been implemented yet\n";
+    std::cerr << "Error: use moe_gpu for the CUDA Expert backend\n";
     return EXIT_FAILURE;
   }
 

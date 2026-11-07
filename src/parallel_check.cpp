@@ -244,7 +244,8 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
                               const std::vector<float>& tokens,
                               const std::vector<moe::RoutingDecision>& routes,
                               moe::TokenRange range, int rank, int world,
-                              PhaseTiming* timing = nullptr) {
+                              PhaseTiming* timing = nullptr,
+                              bool collective_checks = true) {
   const double dispatch_pack_start = MPI_Wtime();
   Buffers dispatch(world);
   for (std::size_t local = 0; local < routes.size(); ++local) {
@@ -274,7 +275,11 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
     }
   }
   int all_valid = 0;
-  MPI_Allreduce(&valid, &all_valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+  if (collective_checks) {
+    MPI_Allreduce(&valid, &all_valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+  } else {
+    all_valid = valid;
+  }
   if (!all_valid) {
     throw std::runtime_error("invalid dispatched assignment: " + error);
   }
@@ -347,7 +352,11 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
                 slots.data() + slot_index * config.dimension);
   }
   for (auto item : seen) valid &= item == 1U;
-  MPI_Allreduce(&valid, &all_valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+  if (collective_checks) {
+    MPI_Allreduce(&valid, &all_valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+  } else {
+    all_valid = valid;
+  }
   if (!all_valid) throw std::runtime_error("missing, duplicate, or misrouted return slot");
   if (timing != nullptr) timing->validation_unpack += MPI_Wtime() - return_unpack_start;
   const double combine_start = MPI_Wtime();
@@ -363,7 +372,7 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
   return output;
 }
 
-#ifndef MOE_CPU_PILOT
+#if !defined(MOE_CPU_PILOT) && !defined(MOE_CPU_BENCH)
 int run(int argc, char** argv) {
   int provided = MPI_THREAD_SINGLE;
   MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
@@ -447,7 +456,12 @@ int run(int argc, char** argv) {
   }
 }
 #else
-int run_pilot(int argc, char** argv) {
+int run_measurement(int argc, char** argv) {
+#ifdef MOE_CPU_BENCH
+  constexpr bool benchmark = true;
+#else
+  constexpr bool benchmark = false;
+#endif
   int provided = MPI_THREAD_SINGLE;
   MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
   int rank = 0, world = 0;
@@ -464,7 +478,9 @@ int run_pilot(int argc, char** argv) {
   }
   MPI_Allreduce(MPI_IN_PLACE, &valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
   if (!valid) {
-    if (rank == 0) std::cerr << "Use valid CPU options and RR placement for the pilot.\n";
+    if (rank == 0) {
+      std::cerr << "Use valid CPU options and RR placement for the CPU measurement.\n";
+    }
     MPI_Finalize();
     return 2;
   }
@@ -514,7 +530,8 @@ int run_pilot(int argc, char** argv) {
     auto forward = [&](PhaseTiming* timing) {
       return config.parallelism == moe::Parallelism::kDataParallel
                  ? forward_dp(config, model, tokens, routes, timing)
-                 : forward_ep(config, model, tokens, routes, range, rank, world, timing);
+                 : forward_ep(config, model, tokens, routes, range, rank, world,
+                              timing, !benchmark);
     };
     auto check_output = [&](const std::vector<float>& output) {
       int local_ok = output.size() == expected.size();
@@ -532,7 +549,7 @@ int run_pilot(int argc, char** argv) {
     constexpr int repeats = 5;
     for (int i = 0; i < warmups; ++i) {
       if (!check_output(forward(nullptr))) {
-        if (rank == 0) std::cerr << "pilot warmup correctness: FAIL\n";
+        if (rank == 0) std::cerr << "CPU warmup correctness: FAIL\n";
         MPI_Finalize();
         return 1;
       }
@@ -556,7 +573,8 @@ int run_pilot(int argc, char** argv) {
                  MPI_COMM_WORLD);
       const bool passed = check_output(output);
       if (rank == 0) {
-        std::cout << "pilot,trial=" << trial << ",parallelism="
+        std::cout << (benchmark ? "benchmark" : "pilot") << ",trial=" << trial
+                  << ",parallelism="
                   << moe::to_string(config.parallelism) << ",communication="
                   << moe::to_string(config.communication) << ",tokens=" << config.tokens
                   << ",experts=" << config.experts << ",ranks=" << world
@@ -589,8 +607,8 @@ int run_pilot(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
-#ifdef MOE_CPU_PILOT
-  return run_pilot(argc, argv);
+#if defined(MOE_CPU_PILOT) || defined(MOE_CPU_BENCH)
+  return run_measurement(argc, argv);
 #else
   return run(argc, argv);
 #endif
