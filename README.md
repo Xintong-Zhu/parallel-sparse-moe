@@ -597,7 +597,8 @@ cmake --build build-gpu --target moe_gpu -j 8
 
 The program reports the visible GPU count, device name, CUDA runtime, one-time
 weight upload, five GPU trials, five CPU serial trials, numerical errors, and
-correctness outcomes. It supports up to 32768 Tokens. The GPU trials use
+correctness outcomes. Both backends receive three warmups before their five
+timed trials. It supports up to 32768 Tokens. The GPU trials use
 preallocated device buffers, whereas the CPU serial forward currently
 allocates temporary buffers on each call; report this distinction. One GPU
 result is a compute-backend comparison, not an MPI scaling point.

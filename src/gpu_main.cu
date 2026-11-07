@@ -288,6 +288,13 @@ int run(int argc, char** argv) {
                 << ",correctness=PASS\n";
     }
   }
+  for (int warmup = 0; warmup < warmups; ++warmup) {
+    const auto cpu = moe::forward_serial(config, model, tokens, trace_pointer);
+    if (cpu.output != reference.output) {
+      std::cerr << "CPU warmup correctness: FAIL\n";
+      return 1;
+    }
+  }
   for (int trial = 0; trial < repeats; ++trial) {
     const auto start = Clock::now();
     const auto cpu = moe::forward_serial(config, model, tokens, trace_pointer);
