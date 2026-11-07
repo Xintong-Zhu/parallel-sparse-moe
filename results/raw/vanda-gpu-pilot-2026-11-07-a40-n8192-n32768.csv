@@ -1,0 +1,30 @@
+# Source: user-pasted Vanda terminal output on 2026-11-07 (Asia/Shanghai)
+# GPU: NVIDIA A40; visible_devices=1; CUDA runtime=12040
+# Compute-node commit: 5e46f9e (confirmed by the user after the runs)
+# Node: GN-A40-034 in the earlier screenshot of this GPU job; not repeated in the timing output
+# Workload: E=16, d=128, h=256, Top-2, uniform controlled trace, default seeds
+# Expert histogram: N=8192 has 1024 assignments per Expert; N=32768 has 4096
+# One-time weight H2D upload: 0.00149454 seconds at N=8192; 0.000477209 seconds at N=32768
+# Each GPU trial has max_abs_error=0 and relative_l2_error=0; all GPU and CPU trials PASS
+# GPU and CPU both use three warmups on this commit; CPU serial allocates per call.
+backend,trial,tokens,experts,host_pack_seconds,h2d_seconds,kernel_seconds,d2h_seconds,host_combine_seconds,end_to_end_seconds,serial_seconds,max_abs_error,relative_l2_error,correctness
+gpu,0,8192,16,0.00058102,0.00059609,0.00176026,0.00062177,0.000762438,0.00433151,,0,0,PASS
+gpu,1,8192,16,0.000549747,0.000603202,0.00176144,0.000620746,0.000770192,0.00431691,,0,0,PASS
+gpu,2,8192,16,0.000543157,0.000603089,0.00175923,0.000617407,0.000766894,0.00430097,,0,0,PASS
+gpu,3,8192,16,0.000550756,0.000594975,0.0017623,0.000628394,0.000762918,0.0043104,,0,0,PASS
+gpu,4,8192,16,0.000550045,0.000608682,0.00175923,0.000628253,0.000770435,0.00432723,,0,0,PASS
+cpu,0,8192,16,,,,,,,0.142314,0,0,PASS
+cpu,1,8192,16,,,,,,,0.151074,0,0,PASS
+cpu,2,8192,16,,,,,,,0.148643,0,0,PASS
+cpu,3,8192,16,,,,,,,0.148745,0,0,PASS
+cpu,4,8192,16,,,,,,,0.134833,0,0,PASS
+gpu,0,32768,16,0.00312002,0.00262169,0.00700122,0.00221996,0.00316706,0.0181478,,0,0,PASS
+gpu,1,32768,16,0.00310638,0.00260536,0.00700957,0.00222497,0.00316513,0.0181307,,0,0,PASS
+gpu,2,32768,16,0.00297283,0.00257974,0.00700166,0.00222288,0.0031317,0.0179278,,0,0,PASS
+gpu,3,32768,16,0.00310661,0.00258806,0.00700717,0.00223459,0.0031266,0.0180814,,0,0,PASS
+gpu,4,32768,16,0.00306601,0.00259214,0.00700035,0.00222118,0.00312272,0.0180211,,0,0,PASS
+cpu,0,32768,16,,,,,,,0.606505,0,0,PASS
+cpu,1,32768,16,,,,,,,0.514362,0,0,PASS
+cpu,2,32768,16,,,,,,,0.570062,0,0,PASS
+cpu,3,32768,16,,,,,,,0.503776,0,0,PASS
+cpu,4,32768,16,,,,,,,0.569162,0,0,PASS

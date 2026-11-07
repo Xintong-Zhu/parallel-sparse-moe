@@ -60,3 +60,23 @@ This log records observed correctness checks. It is not a performance dataset.
   buffers while the CPU serial path allocates temporary buffers per call.
 - One-time model-weight H2D was 0.00163943 s and excluded from the repeated
   GPU timings. No claim about MPI scaling follows from this one-GPU test.
+
+## 2026-11-07: Vanda A40 GPU size pilots
+
+- The user supplied five GPU and five CPU serial trials each at `N=8192` and
+  `N=32768`, with `E=16`, controlled uniform trace and one visible NVIDIA A40.
+  The user subsequently confirmed compute-node `HEAD=5e46f9e`, which includes
+  three CPU warmups. The earlier screenshot of this GPU job showed node
+  `GN-A40-034`; the hostname was not repeated in the timing output. The raw
+  records are in `results/raw/vanda-gpu-pilot-2026-11-07-a40-n8192-n32768.csv`.
+- All GPU trials matched CPU serial output with reported maximum absolute and
+  relative-L2 errors of zero. All CPU serial repeats also passed. At `N=8192`
+  each Expert received 1024 assignments; at `N=32768`, each received 4096.
+- Median GPU end-to-end times were 0.00431691 s and 0.0180814 s at `N=8192`
+  and `N=32768`; median CPU serial times were 0.148643 s and 0.569162 s.
+  Median quotients were 34.4 and 31.5, respectively. These compare distinct
+  CPU and GPU implementations and exclude the one-time GPU weight upload.
+- At `N=32768`, the median GPU kernel time was about 0.00700 s and the median
+  transfer times were about 0.00259 s H2D plus 0.00222 s D2H. CPU host packing
+  and combining each took about 0.0031 s. These phases explain why the full
+  GPU pass is materially longer than the kernel alone.
