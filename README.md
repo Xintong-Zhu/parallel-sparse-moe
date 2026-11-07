@@ -547,6 +547,36 @@ temporary allocations and protocol validation collectives inside each forward
 call; the final benchmark will separate phases and reuse buffers. Do not put
 pilot times into the formal scaling figures.
 
+### Single-GPU Expert FFN checkpoint
+
+The optional `moe_gpu` target uses one CUDA device. The host generates the same
+model and Tokens as `moe_serial`, determines routes, packs two assignments per
+Token, and combines the returned Expert outputs. CUDA runs the two FFN layers
+in FP32. Expert weights are uploaded once before the measured repetitions;
+assignment H2D, two kernels, output D2H, host packing, host combine, and total
+time are printed separately. Each measured GPU output is checked against the
+CPU serial output with the documented elementwise and relative-L2 tolerances.
+
+On an allocated Vanda A40 GPU node, load the CPU build modules and the site
+CUDA toolkit, then configure a separate build directory:
+
+```bash
+module load gompi/2024a
+module load CMake/3.29.3-GCCcore-13.3.0
+module load cuda12.4/toolkit/12.4.1
+cmake -S . -B build-gpu -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=ON
+cmake --build build-gpu --target moe_gpu -j 8
+./build-gpu/moe_gpu --backend cuda --router-mode trace --skew uniform \
+  --tokens 2048
+```
+
+The program reports the visible GPU count, device name, CUDA runtime, one-time
+weight upload, five GPU trials, five CPU serial trials, numerical errors, and
+correctness outcomes. It supports up to 32768 Tokens. The GPU trials use
+preallocated device buffers, whereas the CPU serial forward currently
+allocates temporary buffers on each call; report this distinction. One GPU
+result is a compute-backend comparison, not an MPI scaling point.
+
 The checkpoint can also run its Expert micro-batch tasks with OpenMP. Set
 `OMP_NUM_THREADS` and choose `--omp-schedule static|dynamic`; each thread has
 private scratch, while MPI calls remain on the main thread. The automated

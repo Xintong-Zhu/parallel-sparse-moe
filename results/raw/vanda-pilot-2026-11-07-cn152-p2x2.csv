@@ -1,6 +1,6 @@
 # Source: user-pasted Vanda terminal output on 2026-11-07 (Asia/Shanghai)
 # Host: CN-152; allocation: 2 MPI ranks x 2 OpenMP threads; E=16; N=2048,32768
-# Target commit: 24b72ef; compute-node HEAD was not included in the pasted output
+# Compute-node commit: 24b72ef (subsequently confirmed by the user)
 # Router: controlled uniform trace; d=128, h=256, top_k=2
 # Seeds: model=42, input=314159, routing=271828, calibration=161803
 # These are pilot measurements, not formal performance results.

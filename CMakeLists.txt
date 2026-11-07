@@ -6,6 +6,7 @@ include(CTest)
 
 find_package(MPI REQUIRED COMPONENTS CXX)
 find_package(OpenMP REQUIRED COMPONENTS CXX)
+option(MOE_ENABLE_CUDA "Build the optional single-GPU Expert benchmark" OFF)
 
 add_library(moe_core STATIC
   src/config.cpp
@@ -37,6 +38,16 @@ target_link_libraries(moe_parallel_check PRIVATE moe_core MPI::MPI_CXX OpenMP::O
 add_executable(moe_cpu_pilot src/parallel_check.cpp)
 target_compile_definitions(moe_cpu_pilot PRIVATE MOE_CPU_PILOT=1)
 target_link_libraries(moe_cpu_pilot PRIVATE moe_core MPI::MPI_CXX OpenMP::OpenMP_CXX)
+
+if(MOE_ENABLE_CUDA)
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  add_executable(moe_gpu src/gpu_main.cu)
+  target_link_libraries(moe_gpu PRIVATE moe_core CUDA::cudart)
+  set_target_properties(moe_gpu PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON
+                        CUDA_ARCHITECTURES 86)
+  target_compile_options(moe_gpu PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
+endif()
 
 if(BUILD_TESTING)
   add_executable(moe_protocol_tests tests/protocol_tests.cpp)

@@ -35,8 +35,8 @@ This log records observed correctness checks. It is not a performance dataset.
 - The user supplied five EP P2P and five DP pilot measurements for the same
   synthetic input. All ten had `bitwise_ok=1`; the raw records are in
   `results/raw/vanda-pilot-2026-11-07-cn152-p2x2.csv`.
-- The target commit was `24b72ef`; the compute-node `HEAD` output was not in
-  the pasted record. Pilot measurements include temporary allocations and
+- The user subsequently confirmed the compute-node commit was `24b72ef`.
+  Pilot measurements include temporary allocations and
   validation collectives and must not enter formal speedup figures.
 - The same allocation later produced 15 additional pilot records at `N=32768`:
   EP Alltoallv, EP P2P, and DP, five trials each. All passed bitwise checks.
