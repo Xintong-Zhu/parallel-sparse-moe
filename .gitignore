@@ -70,6 +70,7 @@ Testing/
 # Generated experiment artifacts and private cluster records
 results/raw/*
 !results/raw/.gitkeep
+!results/raw/*.csv
 results/processed/*
 !results/processed/.gitkeep
 figures/*

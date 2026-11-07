@@ -26,3 +26,19 @@ This log records observed correctness checks. It is not a performance dataset.
   `N=1`, `d=4`, `h=8`, `E=4`. The exact compute-node `HEAD` and raw terminal log
   were not retained in the conversation.
 - These are correctness checks. No timing or scaling data were collected.
+
+## 2026-11-07: Vanda partitioned EP and CPU pilot
+
+- On `CN-152`, the user reported EP P2P `PASS` at `P=2`, `T=2`, `N=2048`,
+  uniform trace, with `diagnostic_setup_seconds_max=0.040928` and
+  `diagnostic_forward_seconds_max=0.0260679`.
+- The user supplied five EP P2P and five DP pilot measurements for the same
+  synthetic input. All ten had `bitwise_ok=1`; the raw records are in
+  `results/raw/vanda-pilot-2026-11-07-cn152-p2x2.csv`.
+- The target commit was `24b72ef`; the compute-node `HEAD` output was not in
+  the pasted record. Pilot measurements include temporary allocations and
+  validation collectives and must not enter formal speedup figures.
+- The same allocation later produced 15 additional pilot records at `N=32768`:
+  EP Alltoallv, EP P2P, and DP, five trials each. All passed bitwise checks.
+  Median elapsed times were 0.317387 s, 0.305473 s, and 0.259568 s,
+  respectively. These are exploratory values and not formal comparisons.

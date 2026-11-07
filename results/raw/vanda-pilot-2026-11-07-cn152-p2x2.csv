@@ -1,0 +1,32 @@
+# Source: user-pasted Vanda terminal output on 2026-11-07 (Asia/Shanghai)
+# Host: CN-152; allocation: 2 MPI ranks x 2 OpenMP threads; E=16; N=2048,32768
+# Target commit: 24b72ef; compute-node HEAD was not included in the pasted output
+# Router: controlled uniform trace; d=128, h=256, top_k=2
+# Seeds: model=42, input=314159, routing=271828, calibration=161803
+# These are pilot measurements, not formal performance results.
+trial,parallelism,communication,tokens,experts,ranks,threads,end_to_end_seconds,bitwise_ok
+0,ep,p2p,2048,16,2,2,0.0215769,1
+1,ep,p2p,2048,16,2,2,0.0202931,1
+2,ep,p2p,2048,16,2,2,0.0202219,1
+3,ep,p2p,2048,16,2,2,0.0224963,1
+4,ep,p2p,2048,16,2,2,0.0199671,1
+0,dp,alltoallv,2048,16,2,2,0.0190705,1
+1,dp,alltoallv,2048,16,2,2,0.0182992,1
+2,dp,alltoallv,2048,16,2,2,0.0163826,1
+3,dp,alltoallv,2048,16,2,2,0.0184436,1
+4,dp,alltoallv,2048,16,2,2,0.0171380,1
+0,ep,alltoallv,32768,16,2,2,0.326034,1
+1,ep,alltoallv,32768,16,2,2,0.317139,1
+2,ep,alltoallv,32768,16,2,2,0.317387,1
+3,ep,alltoallv,32768,16,2,2,0.318686,1
+4,ep,alltoallv,32768,16,2,2,0.314290,1
+0,ep,p2p,32768,16,2,2,0.328816,1
+1,ep,p2p,32768,16,2,2,0.299608,1
+2,ep,p2p,32768,16,2,2,0.301198,1
+3,ep,p2p,32768,16,2,2,0.311450,1
+4,ep,p2p,32768,16,2,2,0.305473,1
+0,dp,alltoallv,32768,16,2,2,0.282614,1
+1,dp,alltoallv,32768,16,2,2,0.262476,1
+2,dp,alltoallv,32768,16,2,2,0.258783,1
+3,dp,alltoallv,32768,16,2,2,0.259568,1
+4,dp,alltoallv,32768,16,2,2,0.258389,1
