@@ -1,0 +1,20 @@
+# Source: user-pasted Vanda terminal output on 2026-11-07 (Asia/Shanghai)
+# Compute-node commit: 5e46f9e (confirmed by user for this GPU session)
+# Node: GN-A40-034 in earlier screenshot of this GPU job; not repeated in the timing output
+# GPU: NVIDIA A40; visible_devices=1; CUDA runtime=12040
+# Workload: N=2048, E=16, d=128, h=256, Top-2, uniform controlled trace, default seeds
+# Expert histogram: 256 assignments per Expert (16 Experts)
+# One-time weight H2D upload: 0.000420593 seconds (outside trials)
+# Both backends receive three warmups before the five timed trials on this commit.
+# All GPU and CPU trials PASS; each GPU trial has max_abs_error=0 and relative_l2_error=0.
+backend,trial,tokens,experts,host_pack_seconds,h2d_seconds,kernel_seconds,d2h_seconds,host_combine_seconds,end_to_end_seconds,serial_seconds,max_abs_error,relative_l2_error,correctness
+gpu,0,2048,16,0.000133914,0.000188957,0.000444416,0.000198336,0.000194964,0.00116856,,0,0,PASS
+gpu,1,2048,16,0.000136271,0.000188314,0.000447488,0.000204515,0.000195569,0.00117887,,0,0,PASS
+gpu,2,2048,16,0.000139468,0.000188799,0.00044544,0.000191946,0.0002022,0.00117525,,0,0,PASS
+gpu,3,2048,16,0.000142063,0.000187965,0.000446464,0.000192233,0.000202829,0.00117941,,0,0,PASS
+gpu,4,2048,16,0.000136991,0.000194586,0.000443392,0.000191802,0.000202379,0.00117653,,0,0,PASS
+cpu,0,2048,16,,,,,,,0.0378068,0,0,PASS
+cpu,1,2048,16,,,,,,,0.0314291,0,0,PASS
+cpu,2,2048,16,,,,,,,0.0375016,0,0,PASS
+cpu,3,2048,16,,,,,,,0.0382698,0,0,PASS
+cpu,4,2048,16,,,,,,,0.0314791,0,0,PASS

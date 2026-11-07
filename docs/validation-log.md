@@ -80,3 +80,13 @@ This log records observed correctness checks. It is not a performance dataset.
   transfer times were about 0.00259 s H2D plus 0.00222 s D2H. CPU host packing
   and combining each took about 0.0031 s. These phases explain why the full
   GPU pass is materially longer than the kernel alone.
+- The user then repeated `N=2048` with the same `5e46f9e` warmup protocol.
+  Five GPU and five CPU serial trials all passed; the GPU reported zero error.
+  Median GPU end-to-end was 0.00117653 s and median CPU serial was 0.0375016 s,
+  a quotient of 31.9. One-time weight upload was 0.000420593 s, excluded from
+  trials. Raw values are in
+  `results/raw/vanda-gpu-pilot-2026-11-07-a40-n2048-warmed.csv`.
+- For the three same-protocol sizes `N=2048,8192,32768`, the GPU end-to-end
+  medians are 0.00117653, 0.00431691, and 0.0180814 s. All pass correctness;
+  the original `N=2048` run on `c3144fa` is retained separately for provenance
+  but should not be mixed into the same-protocol comparison.
