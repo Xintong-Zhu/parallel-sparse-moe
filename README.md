@@ -182,6 +182,12 @@ global token ID; `hash(routing_seed, global_token_id, expert_id)` resolves
 quota ties. This gives the requested histogram exactly, subject only to integer
 rounding, and requires no calibration file or timed preprocessing.
 
+For uniform traces with at least 64 and an even number of Experts (including
+the 256 Expert scaling case), a seeded Expert permutation and per-cycle
+rotation generate routes in O(N) time. Every complete cycle assigns each
+Expert once; a partial cycle changes any two Expert counts by at most one.
+This route family is fixed across process counts for the same seed and N.
+
 The realized share of each expert must be within:
 
 - 1 percentage point of the target for `N >= 8192`; and
@@ -521,10 +527,12 @@ but do not meet the repeated-measurement contract for performance figures.
 
 ### CPU pilot measurements
 
-`moe_cpu_pilot` runs one warmup and five measured forward calls. Rank 0 builds
+`moe_cpu_pilot` runs three warmups and five measured forward calls. Rank 0 builds
 the global serial oracle outside the timed loop, scatters expected local
 outputs, and every rank checks bitwise equality after each call. Each printed
-trial records the maximum forward time across ranks and `bitwise_ok`. EP holds
+trial records the maximum forward time across ranks, per-phase rank maxima,
+and `bitwise_ok`. Phase maxima may come from different ranks and must not be
+added together to reconstruct end-to-end time. EP holds
 only its owned Expert weights during the measured calls. Run it inside a Vanda
 allocation after loading the same modules as the checker:
 

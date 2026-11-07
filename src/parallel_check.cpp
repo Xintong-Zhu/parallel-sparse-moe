@@ -9,6 +9,7 @@
 #include <omp.h>
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cmath>
 #include <cstddef>
@@ -24,6 +25,16 @@ namespace {
 
 using Buffers = std::vector<moe::AssignmentBuffer>;
 constexpr std::size_t micro_batch = 8;
+
+struct PhaseTiming {
+  double dispatch_pack = 0.0;
+  double dispatch_comm = 0.0;
+  double compute = 0.0;
+  double return_pack = 0.0;
+  double return_comm = 0.0;
+  double validation_unpack = 0.0;
+  double combine = 0.0;
+};
 
 struct ExpertTask {
   std::uint32_t expert;
@@ -182,7 +193,9 @@ std::vector<moe::RoutingDecision> local_routes(
 
 std::vector<float> forward_dp(const moe::MoEConfig& config, const moe::Model& model,
                               const std::vector<float>& tokens,
-                              const std::vector<moe::RoutingDecision>& routes) {
+                              const std::vector<moe::RoutingDecision>& routes,
+                              PhaseTiming* timing = nullptr) {
+  const double compute_start = MPI_Wtime();
   std::vector<float> output(tokens.size());
   const std::size_t d = config.dimension;
   std::vector<std::vector<std::size_t>> by_expert(config.experts);
@@ -214,6 +227,8 @@ std::vector<float> forward_dp(const moe::MoEConfig& config, const moe::Model& mo
       }
     }
   }
+  if (timing != nullptr) timing->compute = MPI_Wtime() - compute_start;
+  const double combine_start = MPI_Wtime();
   for (std::size_t token = 0; token < routes.size(); ++token) {
     for (std::size_t j = 0; j < d; ++j) {
       output[token * d + j] =
@@ -221,13 +236,16 @@ std::vector<float> forward_dp(const moe::MoEConfig& config, const moe::Model& mo
           routes[token].gate_weights[1] * slots[(token * 2 + 1) * d + j];
     }
   }
+  if (timing != nullptr) timing->combine = MPI_Wtime() - combine_start;
   return output;
 }
 
 std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& model,
                               const std::vector<float>& tokens,
                               const std::vector<moe::RoutingDecision>& routes,
-                              moe::TokenRange range, int rank, int world) {
+                              moe::TokenRange range, int rank, int world,
+                              PhaseTiming* timing = nullptr) {
+  const double dispatch_pack_start = MPI_Wtime();
   Buffers dispatch(world);
   for (std::size_t local = 0; local < routes.size(); ++local) {
     const float* token = tokens.data() + local * config.dimension;
@@ -239,8 +257,12 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
       append(dispatch[owner], wire, token, config.dimension);
     }
   }
+  if (timing != nullptr) timing->dispatch_pack = MPI_Wtime() - dispatch_pack_start;
+  const double dispatch_comm_start = MPI_Wtime();
   const auto received = exchange(dispatch, config.dimension, config.communication,
                                  1000, MPI_COMM_WORLD);
+  if (timing != nullptr) timing->dispatch_comm = MPI_Wtime() - dispatch_comm_start;
+  const double dispatch_check_start = MPI_Wtime();
   std::string error;
   int valid = moe::valid_assignment_buffer(received, config, world, &error) ? 1 : 0;
   if (valid) {
@@ -256,6 +278,8 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
   if (!all_valid) {
     throw std::runtime_error("invalid dispatched assignment: " + error);
   }
+  if (timing != nullptr) timing->validation_unpack += MPI_Wtime() - dispatch_check_start;
+  const double compute_start = MPI_Wtime();
   Buffers returns(world);
   std::vector<float> computed(received.headers.size() * config.dimension);
   const std::size_t d = config.dimension;
@@ -286,14 +310,20 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
       }
     }
   }
+  if (timing != nullptr) timing->compute = MPI_Wtime() - compute_start;
+  const double return_pack_start = MPI_Wtime();
   for (std::size_t i = 0; i < received.headers.size(); ++i) {
     const auto header = moe::unpack_header(received.headers[i]);
     append(returns[header.source_rank], received.headers[i],
            computed.data() + i * config.dimension,
            config.dimension);
   }
+  if (timing != nullptr) timing->return_pack = MPI_Wtime() - return_pack_start;
+  const double return_comm_start = MPI_Wtime();
   const auto returned = exchange(returns, config.dimension, config.communication,
                                  1100, MPI_COMM_WORLD);
+  if (timing != nullptr) timing->return_comm = MPI_Wtime() - return_comm_start;
+  const double return_unpack_start = MPI_Wtime();
   const std::size_t expected = routes.size() * 2U;
   valid = returned.headers.size() == expected;
   std::vector<unsigned char> seen(expected, 0);
@@ -319,6 +349,8 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
   for (auto item : seen) valid &= item == 1U;
   MPI_Allreduce(&valid, &all_valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
   if (!all_valid) throw std::runtime_error("missing, duplicate, or misrouted return slot");
+  if (timing != nullptr) timing->validation_unpack += MPI_Wtime() - return_unpack_start;
+  const double combine_start = MPI_Wtime();
   std::vector<float> output(tokens.size());
   for (std::size_t local = 0; local < routes.size(); ++local) {
     for (std::uint32_t j = 0; j < config.dimension; ++j) {
@@ -327,6 +359,7 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
           routes[local].gate_weights[1] * slots[(local * 2U + 1U) * config.dimension + j];
     }
   }
+  if (timing != nullptr) timing->combine = MPI_Wtime() - combine_start;
   return output;
 }
 
@@ -478,10 +511,10 @@ int run_pilot(int argc, char** argv) {
                  mpi_count(expected.size()),
                  MPI_FLOAT, 0, MPI_COMM_WORLD);
 
-    auto forward = [&]() {
+    auto forward = [&](PhaseTiming* timing) {
       return config.parallelism == moe::Parallelism::kDataParallel
-                 ? forward_dp(config, model, tokens, routes)
-                 : forward_ep(config, model, tokens, routes, range, rank, world);
+                 ? forward_dp(config, model, tokens, routes, timing)
+                 : forward_ep(config, model, tokens, routes, range, rank, world, timing);
     };
     auto check_output = [&](const std::vector<float>& output) {
       int local_ok = output.size() == expected.size();
@@ -495,10 +528,10 @@ int run_pilot(int argc, char** argv) {
       return all_ok != 0;
     };
 
-    constexpr int warmups = 1;
+    constexpr int warmups = 3;
     constexpr int repeats = 5;
     for (int i = 0; i < warmups; ++i) {
-      if (!check_output(forward())) {
+      if (!check_output(forward(nullptr))) {
         if (rank == 0) std::cerr << "pilot warmup correctness: FAIL\n";
         MPI_Finalize();
         return 1;
@@ -507,10 +540,19 @@ int run_pilot(int argc, char** argv) {
     for (int trial = 0; trial < repeats; ++trial) {
       MPI_Barrier(MPI_COMM_WORLD);
       const double start = MPI_Wtime();
-      const auto output = forward();
+      PhaseTiming phases;
+      const auto output = forward(&phases);
       const double local_seconds = MPI_Wtime() - start;
       double max_seconds = 0.0;
       MPI_Reduce(&local_seconds, &max_seconds, 1, MPI_DOUBLE, MPI_MAX, 0,
+                 MPI_COMM_WORLD);
+      const std::array<double, 7> local_phases{
+          phases.dispatch_pack, phases.dispatch_comm, phases.compute,
+          phases.return_pack, phases.return_comm, phases.validation_unpack,
+          phases.combine};
+      std::array<double, 7> max_phases{};
+      MPI_Reduce(local_phases.data(), max_phases.data(),
+                 static_cast<int>(local_phases.size()), MPI_DOUBLE, MPI_MAX, 0,
                  MPI_COMM_WORLD);
       const bool passed = check_output(output);
       if (rank == 0) {
@@ -520,6 +562,13 @@ int run_pilot(int argc, char** argv) {
                   << ",experts=" << config.experts << ",ranks=" << world
                   << ",threads=" << omp_get_max_threads()
                   << ",end_to_end_seconds=" << max_seconds
+                  << ",dispatch_pack_seconds=" << max_phases[0]
+                  << ",dispatch_comm_seconds=" << max_phases[1]
+                  << ",expert_compute_seconds=" << max_phases[2]
+                  << ",return_pack_seconds=" << max_phases[3]
+                  << ",return_comm_seconds=" << max_phases[4]
+                  << ",validation_unpack_seconds=" << max_phases[5]
+                  << ",combine_seconds=" << max_phases[6]
                   << ",bitwise_ok=" << (passed ? 1 : 0) << '\n';
       }
       if (!passed) {

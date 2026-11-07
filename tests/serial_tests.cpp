@@ -82,6 +82,27 @@ int main() {
                 "trace gates sum to one");
   }
 
+  moe::MoEConfig large_uniform = config;
+  large_uniform.tokens = 1025;
+  large_uniform.experts = 256;
+  const auto large_trace = moe::generate_controlled_trace(large_uniform);
+  const auto large_histogram = moe::routing_histogram(large_trace, large_uniform.experts);
+  const auto minmax = std::minmax_element(large_histogram.begin(), large_histogram.end());
+  ok &= check(large_trace.size() == large_uniform.tokens &&
+                  *minmax.second - *minmax.first <= 1U,
+              "large uniform trace is exactly balanced up to one assignment");
+  for (const auto& route : large_trace) {
+    ok &= check(route.expert_ids[0] != route.expert_ids[1],
+                "large uniform trace has two distinct Experts per Token");
+  }
+  const auto large_trace_again = moe::generate_controlled_trace(large_uniform);
+  bool same_large_trace = large_trace.size() == large_trace_again.size();
+  for (std::size_t i = 0; i < large_trace.size() && same_large_trace; ++i) {
+    same_large_trace = large_trace[i].expert_ids == large_trace_again[i].expert_ids &&
+                       large_trace[i].gate_weights == large_trace_again[i].gate_weights;
+  }
+  ok &= check(same_large_trace, "large uniform trace is deterministic");
+
   const auto serial = moe::forward_serial(config, model_a, all_tokens, &trace);
   const auto reference = moe::forward_naive_reference(config, model_a, all_tokens, &trace);
   float max_abs_error = 0.0F;

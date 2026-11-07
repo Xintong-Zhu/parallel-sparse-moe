@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <utility>
 
@@ -190,6 +191,39 @@ std::vector<RoutingDecision> generate_controlled_trace(const MoEConfig& config) 
   }
   if (config.tokens > std::numeric_limits<std::uint64_t>::max() / 2U) {
     throw std::overflow_error("2N assignments overflow uint64_t");
+  }
+
+  // Large uniform Expert sets need O(N) construction for scaling experiments.
+  // Each complete cycle assigns every Expert exactly once; a partial cycle
+  // adds at most one assignment to any Expert. The seeded permutation and
+  // per-cycle rotation vary pairings without changing these exact counts.
+  if (config.skew == Skew::kUniform && config.experts >= 64U &&
+      config.experts % 2U == 0U) {
+    std::vector<std::uint32_t> permutation(config.experts);
+    std::iota(permutation.begin(), permutation.end(), 0U);
+    std::sort(permutation.begin(), permutation.end(), [&](std::uint32_t left,
+                                                          std::uint32_t right) {
+      const auto left_key = keyed_u64(config.routing_seed, kTraceTieDomain, left);
+      const auto right_key = keyed_u64(config.routing_seed, kTraceTieDomain, right);
+      return left_key == right_key ? left < right : left_key < right_key;
+    });
+    const std::uint64_t cycle_tokens = config.experts / 2U;
+    std::vector<RoutingDecision> routes(config.tokens);
+    for (std::uint64_t token = 0; token < config.tokens; ++token) {
+      const auto cycle = token / cycle_tokens;
+      const auto position = token % cycle_tokens;
+      const auto rotation = keyed_u64(config.routing_seed, kTraceTieDomain,
+                                      cycle + config.experts) % config.experts;
+      const auto first_index = (rotation + 2U * position) % config.experts;
+      const auto second_index = (first_index + 1U) % config.experts;
+      const float first_gate = static_cast<float>(
+          0.5 + 0.5 * uniform_open01(config.routing_seed, kTraceGateDomain, token));
+      routes[static_cast<std::size_t>(token)] =
+          {{permutation[static_cast<std::size_t>(first_index)],
+            permutation[static_cast<std::size_t>(second_index)]},
+           {first_gate, 1.0F - first_gate}};
+    }
+    return routes;
   }
 
   auto remaining = allocate_counts(2U * config.tokens, trace_shares(config));
