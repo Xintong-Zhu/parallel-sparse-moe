@@ -147,3 +147,14 @@ This log records observed correctness checks. It is not a performance dataset.
   the protocol and the fixed N=131072 strong curve are recorded in
   `docs/formal-cpu-experiment-config.md`. Formal measurements still require
   a homogeneous multi-node allocation and a 256-rank pilot.
+
+## 2026-11-07: Vanda two-node MPI/OpenMP launch probe
+
+- The user ran `moe_launch_probe --expect-threads 1 --require-distinct-hosts`
+  with two MPI ranks mapped one per node. Rank 0 ran on `CN-149`, rank 1 on
+  `CN-152`. Both reported one OpenMP thread, successful MPI ring exchange,
+  and `MPI_THREAD_FUNNELED`; the final result was `PASS`.
+- This establishes a working two-node MPI launcher. It does not yet validate
+  four-node, 256-rank placement or the formal MoE workload. The exact job ID,
+  node CPU models, and compute-node Git commit were not included in the pasted
+  probe output.

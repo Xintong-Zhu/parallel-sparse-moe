@@ -58,3 +58,27 @@ configuration; do not mix points from different configurations in one curve.
    scale is infeasible, revise this file and rerun every point in that series.
 4. Collect the complete nine-point formal curves under one code revision and
    consistent node type. Do not use earlier pilot timings as formal points.
+
+## Vanda batch runner
+
+`scripts/vanda_cpu_formal.pbs` requests four nodes, 64 CPU cores and MPI slots
+per node, for 256 used physical cores. It requires four distinct nodes with
+the same observed CPU model, builds on the compute allocation, checks four-node
+and 256-rank MPI launch, then runs the largest strong and weak cases first.
+Only if they pass does it collect the remaining eight points in each series.
+The 18 point logs, node list, modules, PBS nodefile, and Git commit are written
+under ignored `private/formal-cpu-<jobid>/`. Every point is required to print
+five bitwise-correct trials and the realized Expert and rank loads. PBS stdout
+is also ignored by Git; do not include these raw logs in the final submission
+package. Convert them to compact CSV evidence and figures after validation.
+
+Submit from the repository's Vanda login-node checkout after pulling the
+intended commit:
+
+```bash
+qsub scripts/vanda_cpu_formal.pbs
+```
+
+The runner uses one code revision for the full strong and weak series. If the
+request is rejected by PBS or a 256-rank point fails, inspect the job output
+and the private logs before changing resources or workloads.
