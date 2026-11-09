@@ -26,30 +26,32 @@ jobs:
           set -euo pipefail
           bash -n scripts/vanda_cpu_formal.pbs
           bash -n scripts/vanda_node_model.sh
-          mpirun --host localhost:1 -np 1 bash ./scripts/vanda_node_model.sh > node_model.csv
+          mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:1 -np 1 bash ./scripts/vanda_node_model.sh > node_model.csv
           cat node_model.csv
           awk -F, 'NF != 2 || $1 == "" || $2 == "" {bad=1} END {if (NR != 1 || bad) exit 1}' node_model.csv
+      # Hosted runners may expose fewer cores than our 2/4-rank tests need.
+      # Sharing cores is for correctness CI only; Vanda timing binds physical cores.
       - name: Unit and MPI correctness checks
         run: |
           set -euo pipefail
           ctest --test-dir build --output-on-failure
           ./build/moe_contract_check --tokens 7 --inspect-ranks 4
           ./build/moe_serial --router-mode trace --skew uniform --tokens 2048
-          OMP_NUM_THREADS=1 mpirun --host localhost:2 -np 2 ./build/moe_mpi_loopback --router-mode trace --skew uniform --tokens 2048
-          OMP_NUM_THREADS=1 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048 --omp-schedule dynamic
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew moderate --tokens 2048 --omp-schedule dynamic
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 2048 --omp-schedule static
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew moderate --tokens 2048 --omp-schedule dynamic
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 1 --dim 4 --hidden 8 --experts 4
-          OMP_NUM_THREADS=1 mpirun --host localhost:1 -np 1 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 7 --dim 4 --hidden 8 --experts 4
-          OMP_NUM_THREADS=1 mpirun --host localhost:4 -np 4 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 7 --dim 4 --hidden 8 --experts 4
-          OMP_NUM_THREADS=1 mpirun --host localhost:4 -np 4 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 1 --dim 4 --hidden 8 --experts 2
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 257 --dim 4 --hidden 8 --experts 256
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_cpu_pilot --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_cpu_pilot --parallelism dp --router-mode router --tokens 17 --dim 4 --hidden 8 --experts 4
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_cpu_bench --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_cpu_bench --parallelism dp --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism dp --router-mode router --tokens 2048
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism dp --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
-          OMP_NUM_THREADS=2 mpirun --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 1 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_mpi_loopback --router-mode trace --skew uniform --tokens 2048
+          OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048 --omp-schedule dynamic
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew moderate --tokens 2048 --omp-schedule dynamic
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 2048 --omp-schedule static
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew moderate --tokens 2048 --omp-schedule dynamic
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 1 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:1 -np 1 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 7 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:4 -np 4 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 7 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:4 -np 4 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 1 --dim 4 --hidden 8 --experts 2
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 257 --dim 4 --hidden 8 --experts 256
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_cpu_pilot --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_cpu_pilot --parallelism dp --router-mode router --tokens 17 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_cpu_bench --parallelism ep --communication p2p --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_cpu_bench --parallelism dp --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism dp --router-mode router --tokens 2048
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism dp --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 1 --dim 4 --hidden 8 --experts 4
