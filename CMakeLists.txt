@@ -64,13 +64,21 @@ if(BUILD_TESTING)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-  target_compile_options(moe_core PRIVATE -Wall -Wextra -Wpedantic -fno-fast-math -ffp-contract=off)
+  target_compile_options(moe_core PRIVATE -Wall -Wextra -Wpedantic)
+  # Callers also perform FP32 slot combination, including the test oracle and
+  # timed benchmark. All C++ consumers must use the same rounding policy.
+  # CUDA has its own --fmad=false option above.
+  target_compile_options(moe_core PUBLIC
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-fast-math>
+    $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>
+  )
   target_compile_options(moe_launch_probe PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(moe_contract_check PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(moe_serial PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(moe_mpi_loopback PRIVATE -Wall -Wextra -Wpedantic)
-  target_compile_options(moe_parallel_check PRIVATE -Wall -Wextra -Wpedantic -fno-fast-math -ffp-contract=off)
-  target_compile_options(moe_cpu_pilot PRIVATE -Wall -Wextra -Wpedantic -fno-fast-math -ffp-contract=off)
+  target_compile_options(moe_parallel_check PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(moe_cpu_pilot PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(moe_cpu_bench PRIVATE -Wall -Wextra -Wpedantic)
   if(BUILD_TESTING)
     target_compile_options(moe_protocol_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(moe_serial_tests PRIVATE -Wall -Wextra -Wpedantic)
