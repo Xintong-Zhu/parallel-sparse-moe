@@ -51,12 +51,15 @@ module list > "$output_dir/modules.txt" 2>&1
 sort -u "$PBS_NODEFILE" > "$output_dir/nodes.txt"
 cp "$PBS_NODEFILE" "$output_dir/pbs_nodefile.txt"
 
-mpirun --map-by ppr:1:node -np "$nodes" sh -c \
-  'model=$(lscpu | grep -m1 "^Model name:" | cut -d: -f2- | xargs); test -n "$model" || exit 1; printf "%s,%s\n" "$(hostname)" "$model"' \
+mpirun --map-by ppr:1:node -np "$nodes" \
+  bash ./scripts/vanda_node_model.sh \
+  2> "$output_dir/node_models.stderr" \
   | sort > "$output_dir/node_models.csv"
+model_rows=$(wc -l < "$output_dir/node_models.csv")
+model_hosts=$(cut -d, -f1 "$output_dir/node_models.csv" | sort -u | wc -l)
 model_count=$(cut -d, -f2- "$output_dir/node_models.csv" | sort -u | wc -l)
-if (( model_count != 1 )); then
-  echo 'Allocated nodes have different CPU models; stopping before timing.' >&2
+if (( model_rows != nodes || model_hosts != nodes || model_count != 1 )); then
+  echo "Expected $nodes distinct hosts with one CPU model; got $model_rows rows, $model_hosts hosts, $model_count models." >&2
   cat "$output_dir/node_models.csv" >&2
   exit 1
 fi

@@ -158,3 +158,17 @@ This log records observed correctness checks. It is not a performance dataset.
   four-node, 256-rank placement or the formal MoE workload. The exact job ID,
   node CPU models, and compute-node Git commit were not included in the pasted
   probe output.
+
+## 2026-11-09: first four-node formal job stopped during environment check
+
+- PBS job `1530163.stdct-mgmt-02` allocated four `GN-A40` nodes and 256 MPI
+  slots under compute-node commit `b03b912`. Its files are in the ignored
+  `private/formal-cpu-1530163/` directory.
+- The CPU-model probe failed before CMake or any MoE timing. PBS output shows
+  `sh: -c: ... unexpected EOF while looking for matching` quotes on all four
+  ranks. The generated `node_models.csv` is empty, and there are no benchmark
+  logs. This attempt contributes zero points to the formal scaling series.
+- The runner now invokes a separate Bash helper for the per-node CPU model and
+  retains its stderr. It also requires one model row from each of four distinct
+  hosts before compiling or measuring. The corrected job requires a new PBS
+  submission; the old job ID must not be reused as performance evidence.
