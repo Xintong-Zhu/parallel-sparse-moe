@@ -69,7 +69,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=OFF \
 cmake --build build --target moe_launch_probe moe_cpu_bench -j 8 \
   > "$output_dir/build.log" 2>&1
 
-mpirun --map-by ppr:1:node --bind-to core -np "$nodes" \
+mpirun --map-by ppr:1:node -np "$nodes" \
   ./build/moe_launch_probe --expect-threads 1 --require-distinct-hosts \
   > "$output_dir/four_node_probe.txt" 2>&1
 mpirun --map-by slot:PE=1 --bind-to core -np 256 \

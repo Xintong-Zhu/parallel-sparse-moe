@@ -172,3 +172,17 @@ This log records observed correctness checks. It is not a performance dataset.
   retains its stderr. It also requires one model row from each of four distinct
   hosts before compiling or measuring. The corrected job requires a new PBS
   submission; the old job ID must not be reused as performance evidence.
+
+## 2026-11-10: second formal job stopped at four-node launch probe
+
+- PBS job `1535780.stdct-mgmt-02` ran commit `a816b5d` on `CN-064`,
+  `CN-068`, `GN-A40-081`, and `GN-A40-089`; each reported Intel Xeon Platinum
+  8452Y. The node-model MPI probe and CPU benchmark build succeeded.
+- The four-node launch probe failed before the 256-rank probe or any timing.
+  OpenMPI reported `PPR: 1:node`, four requested processes, and only three
+  mapped when `--bind-to core` was added to that probe. The preceding model
+  probe used the same `ppr:1:node` mapping successfully without explicit
+  binding. The runner now uses that working mapping for the host-distinctness
+  probe. The 256-rank probe and all benchmark points retain core binding.
+- There are no valid strong- or weak-scaling points in this job's private
+  output directory. A new PBS job is required after updating the script.
