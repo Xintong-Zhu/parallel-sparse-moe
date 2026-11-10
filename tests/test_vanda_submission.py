@@ -69,6 +69,19 @@ class SubmissionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((root / "qsub_args").read_text().splitlines()[-1].endswith(
                 "scripts/vanda_cpu_compare.pbs"))
+            arguments = (root / "qsub_args").read_text().splitlines()
+            snapshot = Path(arguments[1].removeprefix("MOE_SOURCE_DIR="))
+            env.update(BASH_ENV=str(startup), MOE_SOURCE_DIR=str(snapshot))
+            result = run("bash", str(snapshot / "scripts/vanda_cpu_compare.pbs"), env=env)
+            self.assertNotEqual(result.returncode, 0)
+            status = repo / "private/compare-cpu-test/job_status.txt"
+            self.assertIn("stage=allocation", status.read_text())
+            self.assertIn("Batch shell started", result.stdout)
+            self.assertNotIn("git-unavailable", result.stdout + result.stderr)
+            (snapshot / "payload").write_text("tampered\n")
+            result = run("bash", str(snapshot / "scripts/vanda_cpu_compare.pbs"), env=env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("stage=source_verification", status.read_text())
 
 
 if __name__ == "__main__":

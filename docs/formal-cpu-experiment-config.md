@@ -135,3 +135,30 @@ provenance rules. The five serial and 18 EP/DP point logs are written under
 Use only same-job rows for the EP/DP comparison. Serial-relative speedup uses
 the 131072-Token serial median from this job as its denominator; distinguish
 it from the one-rank EP baseline in the earlier scaling series.
+
+The serial executable is launched with one MPI launcher slot and bound to one
+physical core, matching the binding used for the parallel points. It contains
+no MPI computation. MPI startup is outside the executable's internal timer.
+For this trace experiment, timings exclude generation of weights, inputs and
+the routing trace. Serial forward still includes route copying/validation;
+MPI forwards receive precomputed local routes. State this scope when reporting
+serial-relative speedup. The serial benchmark's bitwise check establishes repeat
+consistency; independent serial numerical checks are covered by the serial tests.
+DP rank assignment counts are twice each rank's contiguous Token count; EP counts
+are determined by Expert placement. Do not interpret DP's alltoallv option label
+as evidence of Token all-to-all communication in its forward computation.
+
+### PBS startup failure 1536088
+
+The user cancelled this job after PBS reported `Hold_Types=s`, `run_count=21`,
+`Exit_status=-10`, and `job held, too many failed attempts to run`. No experiment
+directory was observed. PBS documents -10 as `JOB_EXEC_FAILUID` (invalid job
+UID/GID). This is a pre-execution failure; application code changes do not repair
+the cluster's identity service. The specific failing node was not available in
+the user's qstat output, and login-node tracejob could not find server logs.
+Ask HPC support to inspect the server/MoM logs for this job and account if it
+recurs. The compare runner now prints a shell-start marker and identity before
+setup, saves the nodefile and identity, checks a four-node MPI ring, and records
+the 256-rank bindings. These records help diagnose jobs that reach the script.
+
+Reference: [PBS Professional 2024.1 Reference Guide, Job Exit Status](https://help.altair.com/2024.1.0/PBS%20Professional/PBSReferenceGuide2024.1.pdf).

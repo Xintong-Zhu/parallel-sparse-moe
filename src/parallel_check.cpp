@@ -513,8 +513,17 @@ int run_measurement(int argc, char** argv) {
       reference_output = reference.output;
       const auto histogram = moe::routing_histogram(reference.routes, config.experts);
       std::vector<std::uint64_t> owner_counts(static_cast<std::size_t>(world), 0);
-      for (std::size_t expert = 0; expert < histogram.size(); ++expert) {
-        owner_counts[expert % static_cast<std::size_t>(world)] += histogram[expert];
+      if (config.parallelism == moe::Parallelism::kDataParallel) {
+        // DP computes both assignments for each locally owned Token, regardless
+        // of which Expert it selects. Expert ownership applies only to EP.
+        for (int peer = 0; peer < world; ++peer) {
+          owner_counts[peer] = 2 * moe::contiguous_token_range(
+              config.tokens, peer, world).count;
+        }
+      } else {
+        for (std::size_t expert = 0; expert < histogram.size(); ++expert) {
+          owner_counts[expert % static_cast<std::size_t>(world)] += histogram[expert];
+        }
       }
       const char* label = benchmark ? "benchmark" : "pilot";
       std::cout << label << "_config,tokens=" << config.tokens
