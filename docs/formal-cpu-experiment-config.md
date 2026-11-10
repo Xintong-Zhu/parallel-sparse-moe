@@ -98,3 +98,13 @@ The analysis script requires five bitwise-correct trials at every point, exact
 frozen settings and realized uniform loads, four same-model nodes, and passing
 four-node/256-rank launch probes. It derives medians, strong speedup and
 efficiency, and weak efficiency from the same-series one-rank baselines.
+
+After validation, make the EP scaling figures (PNG and vector PDF) from the
+summary CSV:
+
+```bash
+python3 scripts/plot_cpu_formal.py results/processed/vanda-cpu-formal-<jobid>.csv
+```
+
+The strong-scaling speedup in these figures uses the one-rank EP forward as
+its baseline. Report any true-serial baseline comparison separately.
