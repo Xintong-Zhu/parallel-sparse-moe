@@ -42,7 +42,7 @@ jobs:
           ./build/moe_contract_check --tokens 7 --inspect-ranks 4
           ./build/moe_serial --router-mode trace --skew uniform --tokens 2048
           ./build/moe_serial_bench --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
-          OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_cpu_bench --parallelism dp --router-mode trace --skew moderate --tokens 17 --dim 4 --hidden 8 --experts 4 > dp_uneven.log
+          OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_cpu_bench --parallelism dp --router-mode trace --skew moderate --tokens 17 --dim 4 --hidden 8 --experts 16 > dp_uneven.log
           cat dp_uneven.log
           grep -qx 'benchmark_rank_assignment_histogram=18,16' dp_uneven.log
           test "$(grep -c ',bitwise_ok=1$' dp_uneven.log)" -eq 5
