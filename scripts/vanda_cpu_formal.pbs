@@ -5,7 +5,7 @@
 #PBS -l place=scatter
 #PBS -l walltime=01:00:00
 
-set -eo pipefail
+set -Eeo pipefail
 : "${PBS_O_WORKDIR:?PBS_O_WORKDIR is required}"
 : "${PBS_JOBID:?PBS_JOBID is required}"
 cd "$PBS_O_WORKDIR"
@@ -13,6 +13,11 @@ cd "$PBS_O_WORKDIR"
 job_label=${PBS_JOBID%%.*}
 output_dir="$PBS_O_WORKDIR/private/formal-cpu-$job_label"
 mkdir -p "$output_dir"
+exec > >(tee -a "$output_dir/job.log") 2>&1
+stage=environment
+trap 'rc=$?; printf "exit_status=%s\nstage=%s\n" "$rc" "$stage" > "$output_dir/job_status.txt"' EXIT
+trap 'echo "ERROR: stage=$stage line=$LINENO command=$BASH_COMMAND" >&2' ERR
+printf 'Job %s started on %s in %s\n' "$PBS_JOBID" "$(hostname)" "$PBS_O_WORKDIR"
 
 export PAGER=cat LMOD_PAGER=cat
 module load gompi/2024a
@@ -20,10 +25,29 @@ module load CMake/3.29.3-GCCcore-13.3.0
 export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
 export OMP_NUM_THREADS=1 OMP_PLACES=cores OMP_PROC_BIND=close OMP_DYNAMIC=FALSE
 
-if [[ -n $(git status --porcelain --untracked-files=no) ]]; then
-  echo 'Tracked source files have uncommitted changes; refusing an unversioned run.' >&2
+stage=source_verification
+if [[ -n ${MOE_SOURCE_DIR:-} ]]; then
+  cd "$MOE_SOURCE_DIR"
+  read -r git_commit < .moe-source-commit
+  sha256sum --check --quiet .moe-source.sha256
+else
+  # Compatibility for direct qsub, only when Git exists on the compute node.
+  if ! command -v git >/dev/null; then
+    echo 'Git is unavailable. Submit from the login node with bash scripts/submit_vanda_cpu_formal.sh.' >&2
+    exit 1
+  fi
+  git_commit=$(git rev-parse --verify HEAD)
+  changes=$(git status --porcelain --untracked-files=no)
+  if [[ -n "$changes" ]]; then
+    echo 'Tracked source files have uncommitted changes; refusing an unversioned run.' >&2
+    exit 1
+  fi
+fi
+if [[ ! "$git_commit" =~ ^[0-9a-f]{40}$ ]]; then
+  echo 'Missing or invalid source Git commit; refusing to run.' >&2
   exit 1
 fi
+stage=allocation
 if [[ ! -f "${PBS_NODEFILE:-}" ]]; then
   echo 'PBS_NODEFILE is missing.' >&2
   exit 1
@@ -36,7 +60,8 @@ if (( slots < 256 || nodes != 4 )); then
 fi
 
 {
-  printf 'git_commit=%s\n' "$(git rev-parse HEAD)"
+  printf 'git_commit=%s\n' "$git_commit"
+  printf 'source_dir=%s\n' "$PWD"
   printf 'pbs_jobid=%s\n' "$PBS_JOBID"
   printf 'pbs_select=%s\n' '4:ncpus=64:mpiprocs=64:ompthreads=1:mem=250gb'
   printf 'mpi_slots=%s\nnode_count=%s\n' "$slots" "$nodes"
@@ -51,7 +76,9 @@ module list > "$output_dir/modules.txt" 2>&1
 sort -u "$PBS_NODEFILE" > "$output_dir/nodes.txt"
 cp "$PBS_NODEFILE" "$output_dir/pbs_nodefile.txt"
 
-mpirun --map-by ppr:1:node -np "$nodes" \
+stage=node_models
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --map-by ppr:1:node --bind-to none -np "$nodes" \
   bash ./scripts/vanda_node_model.sh \
   2> "$output_dir/node_models.stderr" \
   | sort > "$output_dir/node_models.csv"
@@ -64,15 +91,20 @@ if (( model_rows != nodes || model_hosts != nodes || model_count != 1 )); then
   exit 1
 fi
 
+stage=build
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=OFF \
   > "$output_dir/configure.log" 2>&1
 cmake --build build --target moe_launch_probe moe_cpu_bench -j 8 \
   > "$output_dir/build.log" 2>&1
 
-mpirun --map-by ppr:1:node -np "$nodes" \
+stage=four_node_probe
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --display allocation,map --map-by ppr:1:node --bind-to none -np "$nodes" \
   ./build/moe_launch_probe --expect-threads 1 --require-distinct-hosts \
   > "$output_dir/four_node_probe.txt" 2>&1
-mpirun --map-by slot:PE=1 --bind-to core -np 256 \
+stage=256_rank_probe
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --display allocation,map,bind --map-by slot:PE=1 --bind-to core -np 256 \
   ./build/moe_launch_probe --expect-threads 1 \
   > "$output_dir/256_rank_probe.txt" 2>&1
 
@@ -84,6 +116,7 @@ printf '%s\n' 'series,ranks,tokens,median_end_to_end_seconds' \
 run_point() {
   local kind=$1 ranks=$2 tokens=$3
   local log_file="$output_dir/${kind}-p${ranks}.txt"
+  stage="${kind}-p${ranks}"
   echo "Starting $kind: P=$ranks N=$tokens"
   mpirun --map-by slot:PE=1 --bind-to core -np "$ranks" \
     ./build/moe_cpu_bench --parallelism ep --communication alltoallv \
@@ -122,3 +155,4 @@ for ranks in 1 2 4 8 16 32 64 128; do
 done
 
 echo "All 18 strong/weak points passed. Summaries and raw outputs: $output_dir"
+stage=complete

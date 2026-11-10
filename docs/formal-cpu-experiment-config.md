@@ -79,12 +79,21 @@ Submit from the repository's Vanda login-node checkout after pulling the
 intended commit:
 
 ```bash
-qsub scripts/vanda_cpu_formal.pbs
+bash scripts/submit_vanda_cpu_formal.sh
 ```
 
 The runner uses one code revision for the full strong and weak series. If the
 request is rejected by PBS or a 256-rank point fails, inspect the job output
 and the private logs before changing resources or workloads.
+
+The submission wrapper checks Git on the login node, archives that commit into
+`private/cpu-source-<commit>-<suffix>/`, and records SHA-256 checksums. The batch
+job verifies that frozen tree and builds there, so compute nodes need no Git
+and later changes to the main checkout cannot change the submitted workload.
+Job logs remain under `private/formal-cpu-<jobid>/` in the original checkout.
+`job.log` captures batch output, and `job_status.txt` records the exit code and
+last stage. MPI preflight probes have a two-minute timeout. Only the diagnostic
+one-process-per-node probes disable binding; timed runs retain core binding.
 
 After the complete job has passed, validate all 18 point logs and generate a
 compact summary with the standard-library-only analysis script:

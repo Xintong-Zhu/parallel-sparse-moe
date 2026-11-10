@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Check PBS submission provenance without compute-node Git
+        run: python3 tests/test_vanda_submission.py
       - name: Install MPI
         run: |
           sudo apt-get update
