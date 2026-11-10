@@ -1,0 +1,91 @@
+#!/bin/bash
+#PBS -N moe_cpu_compare
+#PBS -j oe
+#PBS -l select=4:ncpus=64:mpiprocs=64:ompthreads=1:mem=250gb
+#PBS -l place=scatter
+#PBS -l walltime=01:00:00
+
+set -Eeo pipefail
+: "${PBS_O_WORKDIR:?}"
+: "${PBS_JOBID:?}"
+: "${MOE_SOURCE_DIR:?Submit with bash scripts/submit_vanda_cpu_formal.sh scripts/vanda_cpu_compare.pbs}"
+cd "$PBS_O_WORKDIR"
+output_dir="$PWD/private/compare-cpu-${PBS_JOBID%%.*}"
+mkdir -p "$output_dir"
+exec > >(tee -a "$output_dir/job.log") 2>&1
+stage=environment
+trap 'rc=$?; printf "exit_status=%s\nstage=%s\n" "$rc" "$stage" > "$output_dir/job_status.txt"' EXIT
+trap 'echo "ERROR: stage=$stage line=$LINENO command=$BASH_COMMAND" >&2' ERR
+export PAGER=cat LMOD_PAGER=cat
+module load gompi/2024a
+module load CMake/3.29.3-GCCcore-13.3.0
+export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
+export OMP_NUM_THREADS=1 OMP_PLACES=cores OMP_PROC_BIND=close OMP_DYNAMIC=FALSE
+stage=source_verification
+cd "$MOE_SOURCE_DIR"
+read -r git_commit < .moe-source-commit
+[[ "$git_commit" =~ ^[0-9a-f]{40}$ ]]
+sha256sum --check --quiet .moe-source.sha256
+stage=allocation
+slots=$(wc -l < "$PBS_NODEFILE")
+nodes=$(sort -u "$PBS_NODEFILE" | wc -l)
+(( slots >= 256 && nodes == 4 ))
+{
+  printf 'git_commit=%s\npbs_jobid=%s\nsource_dir=%s\n' "$git_commit" "$PBS_JOBID" "$PWD"
+  printf 'mpi_slots=%s\nnode_count=%s\n' "$slots" "$nodes"
+  printf 'compiler=%s\nmpirun=%s\n' "$(command -v c++)" "$(command -v mpirun)"
+  printf 'ranks=1,2,4,8,16,32,64,128,256\nthreads=1\n'
+  printf 'tokens=131072\nexperts=256\nrouter_mode=trace\nskew=uniform\n'
+  printf 'warmups=3\nrepeats=5\n'
+} > "$output_dir/metadata.txt"
+sort -u "$PBS_NODEFILE" > "$output_dir/nodes.txt"
+module list > "$output_dir/modules.txt" 2>&1
+stage=node_models
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --map-by ppr:1:node --bind-to none -np 4 \
+  bash ./scripts/vanda_node_model.sh 2> "$output_dir/node_models.stderr" \
+  | sort > "$output_dir/node_models.csv"
+(( $(wc -l < "$output_dir/node_models.csv") == 4 ))
+(( $(cut -d, -f1 "$output_dir/node_models.csv" | sort -u | wc -l) == 4 ))
+(( $(cut -d, -f2- "$output_dir/node_models.csv" | sort -u | wc -l) == 1 ))
+stage=build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=OFF \
+  > "$output_dir/configure.log" 2>&1
+cmake --build build --target moe_serial_bench moe_cpu_bench moe_launch_probe -j 8 \
+  > "$output_dir/build.log" 2>&1
+stage=launch_probe
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --map-by slot:PE=1 --bind-to core -np 256 \
+  ./build/moe_launch_probe --expect-threads 1 \
+  > "$output_dir/256_rank_probe.txt" 2>&1
+grep -q '^RESULT: PASS$' "$output_dir/256_rank_probe.txt"
+for tokens in 512 2048 8192 32768 131072; do
+  stage="serial-${tokens}"
+  log="$output_dir/serial-n${tokens}.txt"
+  echo "Starting $stage"
+  ./build/moe_serial_bench --router-mode trace --skew uniform \
+    --tokens "$tokens" --experts 256 > "$log" 2>&1
+  awk '/^serial_benchmark,trial=/{n++; if ($0 !~ /,bitwise_ok=1$/) bad=1}
+       END {if (n != 5 || bad) exit 1}' "$log"
+  echo "PASS $stage"
+done
+# Pair EP and DP on the same allocation; start at 256 to catch resource limits.
+for ranks in 256 1 2 4 8 16 32 64 128; do
+  for mode in ep dp; do
+    stage="${mode}-p${ranks}"
+    log="$output_dir/${stage}.txt"
+    echo "Starting $stage"
+    timeout --signal=TERM --kill-after=15s 600s \
+      mpirun --map-by slot:PE=1 --bind-to core -np "$ranks" \
+      ./build/moe_cpu_bench --parallelism "$mode" --communication alltoallv \
+      --router-mode trace --skew uniform --tokens 131072 --experts 256 \
+      > "$log" 2>&1
+    grep -q '^benchmark_expert_histogram=' "$log"
+    grep -q '^benchmark_rank_assignment_histogram=' "$log"
+    awk '/^benchmark,trial=/{n++; if ($0 !~ /,bitwise_ok=1$/) bad=1}
+         END {if (n != 5 || bad) exit 1}' "$log"
+    echo "PASS $stage"
+  done
+done
+stage=complete
+echo "All five serial sizes and 18 EP/DP strong-scaling points passed: $output_dir"

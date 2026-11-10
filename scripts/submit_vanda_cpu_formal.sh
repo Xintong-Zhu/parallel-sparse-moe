@@ -10,6 +10,11 @@ if [[ -n "$changes" ]]; then
   exit 1
 fi
 command -v qsub >/dev/null
+job_script=${1:-scripts/vanda_cpu_formal.pbs}
+case "$job_script" in
+  scripts/vanda_cpu_formal.pbs|scripts/vanda_cpu_compare.pbs) ;;
+  *) echo 'Choose scripts/vanda_cpu_formal.pbs or scripts/vanda_cpu_compare.pbs.' >&2; exit 2 ;;
+esac
 mkdir -p "$repo/private"
 snapshot=$(mktemp -d "$repo/private/cpu-source-${commit:0:12}-XXXXXXXX")
 # PBS -v separates variables with commas; reject ambiguous path values.
@@ -25,4 +30,4 @@ printf '%s\n' "$commit" > "$snapshot/.moe-source-commit"
     xargs -0 sha256sum > .moe-source.sha256
 )
 printf 'Frozen source: %s\nGit commit: %s\n' "$snapshot" "$commit"
-qsub -v "MOE_SOURCE_DIR=$snapshot" "$snapshot/scripts/vanda_cpu_formal.pbs"
+qsub -v "MOE_SOURCE_DIR=$snapshot" "$snapshot/$job_script"

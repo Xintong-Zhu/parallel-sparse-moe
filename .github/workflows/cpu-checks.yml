@@ -27,6 +27,8 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/vanda_cpu_formal.pbs
+          bash -n scripts/vanda_cpu_compare.pbs
+          bash -n scripts/submit_vanda_cpu_formal.sh
           bash -n scripts/vanda_node_model.sh
           mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:1 -np 1 bash ./scripts/vanda_node_model.sh > node_model.csv
           cat node_model.csv
@@ -39,6 +41,7 @@ jobs:
           ctest --test-dir build --output-on-failure
           ./build/moe_contract_check --tokens 7 --inspect-ranks 4
           ./build/moe_serial --router-mode trace --skew uniform --tokens 2048
+          ./build/moe_serial_bench --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4
           OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_mpi_loopback --router-mode trace --skew uniform --tokens 2048
           OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048
           OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048 --omp-schedule dynamic

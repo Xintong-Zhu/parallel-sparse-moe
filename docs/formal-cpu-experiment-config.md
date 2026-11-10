@@ -117,3 +117,21 @@ python3 scripts/plot_cpu_formal.py results/processed/vanda-cpu-formal-<jobid>.cs
 
 The strong-scaling speedup in these figures uses the one-rank EP forward as
 its baseline. Report any true-serial baseline comparison separately.
+
+## Paired serial and DP comparison
+
+The next Vanda job measures the true serial program at 512, 2048, 8192,
+32768, and 131072 Tokens with E=256. It also measures EP and replicated-weight
+DP on the **same four-node allocation** at all nine strong-scaling rank counts,
+using the same 131072-Token uniform trace. Submit from the login node:
+
+```bash
+bash scripts/submit_vanda_cpu_formal.sh scripts/vanda_cpu_compare.pbs
+```
+
+Its frozen-source, node-model, and 256-rank preflights use the formal job's
+provenance rules. The five serial and 18 EP/DP point logs are written under
+`private/compare-cpu-<jobid>/`; every point requires five passing trials.
+Use only same-job rows for the EP/DP comparison. Serial-relative speedup uses
+the 131072-Token serial median from this job as its denominator; distinguish
+it from the one-rank EP baseline in the earlier scaling series.

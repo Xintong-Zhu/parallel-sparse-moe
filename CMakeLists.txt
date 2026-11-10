@@ -29,6 +29,9 @@ target_link_libraries(moe_contract_check PRIVATE moe_core)
 add_executable(moe_serial src/serial_main.cpp)
 target_link_libraries(moe_serial PRIVATE moe_core)
 
+add_executable(moe_serial_bench src/serial_bench.cpp)
+target_link_libraries(moe_serial_bench PRIVATE moe_core)
+
 add_executable(moe_mpi_loopback src/mpi_loopback.cpp)
 target_link_libraries(moe_mpi_loopback PRIVATE moe_core MPI::MPI_CXX)
 
@@ -75,6 +78,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
   target_compile_options(moe_launch_probe PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(moe_contract_check PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(moe_serial PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(moe_serial_bench PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(moe_mpi_loopback PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(moe_parallel_check PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(moe_cpu_pilot PRIVATE -Wall -Wextra -Wpedantic)

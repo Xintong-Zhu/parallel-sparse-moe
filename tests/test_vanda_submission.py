@@ -14,7 +14,8 @@ class SubmissionTests(unittest.TestCase):
             root = Path(temporary)
             repo = root / "repo"
             (repo / "scripts").mkdir(parents=True)
-            for name in ("submit_vanda_cpu_formal.sh", "vanda_cpu_formal.pbs"):
+            for name in ("submit_vanda_cpu_formal.sh", "vanda_cpu_formal.pbs",
+                         "vanda_cpu_compare.pbs"):
                 shutil.copy(project / "scripts" / name, repo / "scripts" / name)
             (repo / "payload").write_text("original\n")
             def run(*args, env=None):
@@ -61,6 +62,12 @@ class SubmissionTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("stage=source_verification", status.read_text())
             self.assertIn("git-unavailable", result.stdout + result.stderr)
+            env.pop("BASH_ENV")
+            result = run("bash", "scripts/submit_vanda_cpu_formal.sh",
+                         "scripts/vanda_cpu_compare.pbs", env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((root / "qsub_args").read_text().splitlines()[-1].endswith(
+                "scripts/vanda_cpu_compare.pbs"))
 
 
 if __name__ == "__main__":
