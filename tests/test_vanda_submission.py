@@ -63,6 +63,7 @@ class SubmissionTests(unittest.TestCase):
             self.assertIn("stage=source_verification", status.read_text())
             self.assertIn("git-unavailable", result.stdout + result.stderr)
             env.pop("BASH_ENV")
+            (repo / "payload").write_text("original\n")
             result = run("bash", "scripts/submit_vanda_cpu_formal.sh",
                          "scripts/vanda_cpu_compare.pbs", env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
