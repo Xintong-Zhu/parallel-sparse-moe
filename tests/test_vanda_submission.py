@@ -15,7 +15,8 @@ class SubmissionTests(unittest.TestCase):
             repo = root / "repo"
             (repo / "scripts").mkdir(parents=True)
             for name in ("submit_vanda_cpu_formal.sh", "vanda_cpu_formal.pbs",
-                         "vanda_cpu_compare.pbs", "vanda_cpu_hybrid.pbs"):
+                         "vanda_cpu_compare.pbs", "vanda_cpu_hybrid.pbs",
+                         "vanda_cpu_comm_skew.pbs"):
                 shutil.copy(project / "scripts" / name, repo / "scripts" / name)
             (repo / "payload").write_text("original\n")
             def run(*args, env=None):
@@ -52,6 +53,7 @@ class SubmissionTests(unittest.TestCase):
             status = repo / "private/formal-cpu-test/job_status.txt"
             self.assertIn("stage=allocation", status.read_text())
             self.assertNotIn("git-unavailable", result.stdout + result.stderr)
+
             # A modified snapshot must fail before any allocation or MPI work.
             (snapshot / "payload").write_text("tampered\n")
             result = run("bash", str(snapshot / "scripts/vanda_cpu_formal.pbs"), env=env)
@@ -96,6 +98,20 @@ class SubmissionTests(unittest.TestCase):
             result = run("bash", str(snapshot / "scripts/vanda_cpu_hybrid.pbs"), env=env)
             self.assertNotEqual(result.returncode, 0)
             status = repo / "private/hybrid-cpu-test/job_status.txt"
+            self.assertIn("stage=allocation", status.read_text())
+            self.assertNotIn("git-unavailable", result.stdout + result.stderr)
+
+            env.pop("BASH_ENV")
+            result = run("bash", "scripts/submit_vanda_cpu_formal.sh",
+                         "scripts/vanda_cpu_comm_skew.pbs", env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            arguments = (root / "qsub_args").read_text().splitlines()
+            self.assertTrue(arguments[-1].endswith("scripts/vanda_cpu_comm_skew.pbs"))
+            snapshot = Path(arguments[1].removeprefix("MOE_SOURCE_DIR="))
+            env.update(BASH_ENV=str(startup), MOE_SOURCE_DIR=str(snapshot))
+            result = run("bash", str(snapshot / "scripts/vanda_cpu_comm_skew.pbs"), env=env)
+            self.assertNotEqual(result.returncode, 0)
+            status = repo / "private/comm-skew-test/job_status.txt"
             self.assertIn("stage=allocation", status.read_text())
             self.assertNotIn("git-unavailable", result.stdout + result.stderr)
 

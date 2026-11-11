@@ -1,0 +1,107 @@
+#!/bin/bash
+#PBS -N moe_comm_skew
+#PBS -j oe
+#PBS -l select=4:ncpus=4:mpiprocs=2:ompthreads=2:mem=16gb
+#PBS -l place=scatter
+#PBS -l walltime=01:00:00
+
+set -Eeo pipefail
+printf 'Batch shell started: job=%s host=%s\n' "${PBS_JOBID:-unset}" "$(hostname)"
+id
+: "${PBS_O_WORKDIR:?}"
+: "${PBS_JOBID:?}"
+: "${MOE_SOURCE_DIR:?Submit with the frozen-source wrapper}"
+cd "$PBS_O_WORKDIR"
+output_dir="$PWD/private/comm-skew-${PBS_JOBID%%.*}"
+mkdir -p "$output_dir"
+exec > >(tee -a "$output_dir/job.log") 2>&1
+stage=environment
+trap 'rc=$?; printf "exit_status=%s\nstage=%s\n" "$rc" "$stage" > "$output_dir/job_status.txt"' EXIT
+trap 'echo "ERROR: stage=$stage line=$LINENO command=$BASH_COMMAND" >&2' ERR
+export PAGER=cat LMOD_PAGER=cat
+module load gompi/2024a
+module load CMake/3.29.3-GCCcore-13.3.0
+export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
+export OMP_NUM_THREADS=2 OMP_PLACES=cores OMP_PROC_BIND=close OMP_DYNAMIC=FALSE
+stage=source_verification
+cd "$MOE_SOURCE_DIR"
+read -r git_commit < .moe-source-commit
+[[ "$git_commit" =~ ^[0-9a-f]{40}$ ]]
+sha256sum --check --quiet .moe-source.sha256
+stage=allocation
+[[ -f "${PBS_NODEFILE:-}" ]]
+[[ $(wc -l < "$PBS_NODEFILE") -eq 8 ]]
+[[ $(sort -u "$PBS_NODEFILE" | wc -l) -eq 4 ]]
+cp "$PBS_NODEFILE" "$output_dir/pbs_nodefile.txt"
+sort -u "$PBS_NODEFILE" > "$output_dir/nodes.txt"
+id > "$output_dir/execution_identity.txt"
+module list > "$output_dir/modules.txt" 2>&1
+qstat -f "$PBS_JOBID" > "$output_dir/pbs_allocation.txt"
+{
+  printf 'git_commit=%s\npbs_jobid=%s\nsource_dir=%s\n' "$git_commit" "$PBS_JOBID" "$PWD"
+  printf 'requested_cores=16\nused_cores=16\nnode_count=4\nmpi_slots=8\n'
+  printf 'ranks=8\nthreads=2\ntokens=32768,131072\nexperts=16\ndimension=128\nhidden=256\n'
+  printf 'router_mode=trace\nskew=uniform,moderate,extreme\nhot_layout=A\nplacement=rr\n'
+  printf 'communication=alltoallv,p2p\nomp_schedule=static\n'
+  printf 'rounds=A,B\nwarmups=3\nrepeats_per_round=5\n'
+  printf 'binding=ppr:2:node:PE=2,bind-to=core\n'
+  printf 'timing_scope=precomputed_routes,EP_forward_including_dispatch_and_return\n'
+} > "$output_dir/metadata.txt"
+stage=node_models
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --map-by ppr:1:node --bind-to none -np 4 bash ./scripts/vanda_node_model.sh \
+  2> "$output_dir/node_models.stderr" | sort > "$output_dir/node_models.csv"
+[[ $(wc -l < "$output_dir/node_models.csv") -eq 4 ]]
+[[ $(cut -d, -f1 "$output_dir/node_models.csv" | sort -u | wc -l) -eq 4 ]]
+[[ $(cut -d, -f2- "$output_dir/node_models.csv" | sort -u | wc -l) -eq 1 ]]
+stage=build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=OFF > "$output_dir/configure.log" 2>&1
+cmake --build build --target moe_cpu_bench moe_parallel_check moe_launch_probe -j 4 > "$output_dir/build.log" 2>&1
+stage=launch_probe
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --map-by ppr:2:node:PE=2 --bind-to core --report-bindings -np 8 \
+  ./build/moe_launch_probe --expect-threads 2 --require-distinct-hosts \
+  > "$output_dir/launch_probe.txt" 2>&1
+grep -q '^RESULT: PASS$' "$output_dir/launch_probe.txt"
+[[ $(grep -Ec '^  rank [0-9]+: host=' "$output_dir/launch_probe.txt") -eq 8 ]]
+[[ $(grep -E '^  rank [0-9]+: host=' "$output_dir/launch_probe.txt" | sed -E 's/.*host=([^,]+),.*/\1/' | sort -u | wc -l) -eq 4 ]]
+
+# Verify both exchange implementations under the most skewed trace before timing.
+for communication in alltoallv p2p; do
+  stage="correctness-${communication}"
+  timeout --signal=TERM --kill-after=15s 120s \
+    mpirun --map-by ppr:2:node:PE=2 --bind-to core -np 8 \
+    ./build/moe_parallel_check --parallelism ep --communication "$communication" \
+    --router-mode trace --skew extreme --hot-layout A --tokens 2048 --experts 16 \
+    > "$output_dir/${stage}.txt" 2>&1
+  grep -q 'CPU ep correctness: PASS' "$output_dir/${stage}.txt"
+done
+
+for round in A B; do
+  if [[ "$round" == A ]]; then
+    token_order=(32768 131072); skew_order=(uniform moderate extreme); comm_order=(alltoallv p2p)
+  else
+    token_order=(131072 32768); skew_order=(extreme moderate uniform); comm_order=(p2p alltoallv)
+  fi
+  for tokens in "${token_order[@]}"; do
+    for skew in "${skew_order[@]}"; do
+      for communication in "${comm_order[@]}"; do
+        stage="${round}-n${tokens}-${skew}-${communication}"
+        log="$output_dir/${stage}.txt"
+        echo "Starting $stage"
+        timeout --signal=TERM --kill-after=15s 600s \
+          mpirun --map-by ppr:2:node:PE=2 --bind-to core -np 8 \
+          ./build/moe_cpu_bench --parallelism ep --communication "$communication" \
+          --router-mode trace --skew "$skew" --hot-layout A --tokens "$tokens" \
+          --experts 16 --omp-schedule static > "$log" 2>&1
+        grep -q '^benchmark_expert_histogram=' "$log"
+        grep -q '^benchmark_rank_assignment_histogram=' "$log"
+        awk '/^benchmark,trial=/{n++; if ($0 !~ /,bitwise_ok=1$/) bad=1}
+             END {if (n != 5 || bad) exit 1}' "$log"
+        echo "PASS $stage"
+      done
+    done
+  done
+done
+stage=complete
+echo "All 24 communication/skew runs (120 trials) passed: $output_dir"
