@@ -28,8 +28,10 @@ jobs:
           set -euo pipefail
           bash -n scripts/vanda_cpu_formal.pbs
           bash -n scripts/vanda_cpu_compare.pbs
+          bash -n scripts/vanda_cpu_hybrid.pbs
           bash -n scripts/submit_vanda_cpu_formal.sh
           bash -n scripts/vanda_node_model.sh
+          bash -n scripts/vanda_node_topology.sh
           mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:1 -np 1 bash ./scripts/vanda_node_model.sh > node_model.csv
           cat node_model.csv
           awk -F, 'NF != 2 || $1 == "" || $2 == "" {bad=1} END {if (NR != 1 || bad) exit 1}' node_model.csv
@@ -39,6 +41,10 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir build --output-on-failure
+          OMP_NUM_THREADS=1 OMP_PLACES=cores OMP_PROC_BIND=close mpirun --map-by slot:PE=1 --bind-to core --host localhost:1 -np 1 ./build/moe_launch_probe --expect-threads 1 --check-affinity
+          if OMP_NUM_THREADS=2 OMP_PLACES=cores OMP_PROC_BIND=close mpirun --map-by slot:PE=1 --bind-to core --host localhost:1 -np 1 ./build/moe_launch_probe --expect-threads 2 --check-affinity; then
+            echo 'ERROR: overlapping OpenMP threads were accepted'; exit 1
+          fi
           ./build/moe_contract_check --tokens 7 --inspect-ranks 4
           ./build/moe_serial --router-mode trace --skew uniform --tokens 2048
           ./build/moe_serial_bench --router-mode trace --skew uniform --tokens 17 --dim 4 --hidden 8 --experts 4

@@ -15,7 +15,7 @@ class SubmissionTests(unittest.TestCase):
             repo = root / "repo"
             (repo / "scripts").mkdir(parents=True)
             for name in ("submit_vanda_cpu_formal.sh", "vanda_cpu_formal.pbs",
-                         "vanda_cpu_compare.pbs"):
+                         "vanda_cpu_compare.pbs", "vanda_cpu_hybrid.pbs"):
                 shutil.copy(project / "scripts" / name, repo / "scripts" / name)
             (repo / "payload").write_text("original\n")
             def run(*args, env=None):
@@ -57,10 +57,12 @@ class SubmissionTests(unittest.TestCase):
             result = run("bash", str(snapshot / "scripts/vanda_cpu_formal.pbs"), env=env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("stage=source_verification", status.read_text())
+
             env.pop("MOE_SOURCE_DIR")
             result = run("bash", "scripts/vanda_cpu_formal.pbs", env=env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("stage=source_verification", status.read_text())
+
             self.assertIn("git-unavailable", result.stdout + result.stderr)
             env.pop("BASH_ENV")
             (repo / "payload").write_text("original\n")
@@ -82,6 +84,20 @@ class SubmissionTests(unittest.TestCase):
             result = run("bash", str(snapshot / "scripts/vanda_cpu_compare.pbs"), env=env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("stage=source_verification", status.read_text())
+
+            env.pop("BASH_ENV")
+            result = run("bash", "scripts/submit_vanda_cpu_formal.sh",
+                         "scripts/vanda_cpu_hybrid.pbs", env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            arguments = (root / "qsub_args").read_text().splitlines()
+            self.assertTrue(arguments[-1].endswith("scripts/vanda_cpu_hybrid.pbs"))
+            snapshot = Path(arguments[1].removeprefix("MOE_SOURCE_DIR="))
+            env.update(BASH_ENV=str(startup), MOE_SOURCE_DIR=str(snapshot))
+            result = run("bash", str(snapshot / "scripts/vanda_cpu_hybrid.pbs"), env=env)
+            self.assertNotEqual(result.returncode, 0)
+            status = repo / "private/hybrid-cpu-test/job_status.txt"
+            self.assertIn("stage=allocation", status.read_text())
+            self.assertNotIn("git-unavailable", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

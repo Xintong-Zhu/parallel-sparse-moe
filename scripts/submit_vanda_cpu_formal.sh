@@ -12,8 +12,8 @@ fi
 command -v qsub >/dev/null
 job_script=${1:-scripts/vanda_cpu_formal.pbs}
 case "$job_script" in
-  scripts/vanda_cpu_formal.pbs|scripts/vanda_cpu_compare.pbs) ;;
-  *) echo 'Choose scripts/vanda_cpu_formal.pbs or scripts/vanda_cpu_compare.pbs.' >&2; exit 2 ;;
+  scripts/vanda_cpu_formal.pbs|scripts/vanda_cpu_compare.pbs|scripts/vanda_cpu_hybrid.pbs) ;;
+  *) echo 'Choose a supported formal, compare, or hybrid CPU PBS script.' >&2; exit 2 ;;
 esac
 mkdir -p "$repo/private"
 snapshot=$(mktemp -d "$repo/private/cpu-source-${commit:0:12}-XXXXXXXX")

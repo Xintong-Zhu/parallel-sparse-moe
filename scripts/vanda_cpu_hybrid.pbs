@@ -1,0 +1,110 @@
+#!/bin/bash
+#PBS -N moe_cpu_hybrid
+#PBS -j oe
+#PBS -l select=4:ncpus=72:mpiprocs=64:ompthreads=1:mem=250gb
+#PBS -l place=scatter:excl
+#PBS -l walltime=01:00:00
+
+set -Eeo pipefail
+printf 'Batch shell started: job=%s host=%s\n' "${PBS_JOBID:-unset}" "$(hostname)"
+id
+: "${PBS_O_WORKDIR:?}"
+: "${PBS_JOBID:?}"
+: "${MOE_SOURCE_DIR:?Submit with the frozen-source wrapper}"
+cd "$PBS_O_WORKDIR"
+output_dir="$PWD/private/hybrid-cpu-${PBS_JOBID%%.*}"
+mkdir -p "$output_dir"
+exec > >(tee -a "$output_dir/job.log") 2>&1
+stage=environment
+trap 'rc=$?; printf "exit_status=%s\nstage=%s\n" "$rc" "$stage" > "$output_dir/job_status.txt"' EXIT
+trap 'echo "ERROR: stage=$stage line=$LINENO command=$BASH_COMMAND" >&2' ERR
+export PAGER=cat LMOD_PAGER=cat
+module load gompi/2024a
+module load CMake/3.29.3-GCCcore-13.3.0
+export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
+export OMP_NUM_THREADS=1 OMP_PLACES=cores OMP_PROC_BIND=close OMP_DYNAMIC=FALSE
+stage=source_verification
+cd "$MOE_SOURCE_DIR"
+read -r git_commit < .moe-source-commit
+[[ "$git_commit" =~ ^[0-9a-f]{40}$ ]]
+sha256sum --check --quiet .moe-source.sha256
+stage=allocation
+[[ -f "${PBS_NODEFILE:-}" ]]
+[[ $(wc -l < "$PBS_NODEFILE") -eq 256 ]]
+[[ $(sort -u "$PBS_NODEFILE" | wc -l) -eq 4 ]]
+cp "$PBS_NODEFILE" "$output_dir/pbs_nodefile.txt"
+sort -u "$PBS_NODEFILE" > "$output_dir/nodes.txt"
+id > "$output_dir/execution_identity.txt"
+module list > "$output_dir/modules.txt" 2>&1
+qstat -f "$PBS_JOBID" > "$output_dir/pbs_allocation.txt"
+{
+  printf 'git_commit=%s\npbs_jobid=%s\nsource_dir=%s\n' "$git_commit" "$PBS_JOBID" "$PWD"
+  printf 'requested_cores=288\nused_cores=256\nnode_count=4\nmpi_slots=256\n'
+  printf 'tokens=131072\nexperts=256\ndimension=128\nhidden=256\n'
+  printf 'router_mode=trace\nskew=uniform\nplacement=rr\ncommunication=alltoallv\n'
+  printf 'rounds=A,B\nwarmups=3\nrepeats_per_round=5\nomp_schedule=static\n'
+  printf 'OMP_PLACES=cores\nOMP_PROC_BIND=close\nOMP_DYNAMIC=FALSE\n'
+  printf 'mapping=ppr:32/T:package:PE=T,rank-by=slot,bind-to=core\n'
+  printf 'timing_scope=forward_with_precomputed_trace,excluding_setup_and_global_gather\n'
+} > "$output_dir/metadata.txt"
+stage=node_models
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --map-by ppr:1:node --bind-to none -np 4 bash ./scripts/vanda_node_model.sh \
+  2> "$output_dir/node_models.stderr" | sort > "$output_dir/node_models.csv"
+[[ $(wc -l < "$output_dir/node_models.csv") -eq 4 ]]
+[[ $(cut -d, -f1 "$output_dir/node_models.csv" | sort -u | wc -l) -eq 4 ]]
+[[ $(cut -d, -f2- "$output_dir/node_models.csv" | sort -u | wc -l) -eq 1 ]]
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --map-by ppr:1:node --bind-to none -np 4 \
+  bash ./scripts/vanda_node_topology.sh "$output_dir"
+stage=build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=OFF > "$output_dir/configure.log" 2>&1
+cmake --build build --target moe_cpu_bench moe_launch_probe -j 8 > "$output_dir/build.log" 2>&1
+
+# Every layout must pass before any performance data are collected.
+for threads in 1 2 4 8 16; do
+  ranks=$((256 / threads))
+  per_socket=$((32 / threads))
+  export OMP_NUM_THREADS=$threads
+  stage="affinity-p${ranks}-t${threads}"
+  log="$output_dir/${stage}.txt"
+  timeout --signal=TERM --kill-after=15s 120s \
+    mpirun --map-by "ppr:${per_socket}:package:PE=${threads}" --rank-by slot \
+    --bind-to core --report-bindings -np "$ranks" \
+    ./build/moe_launch_probe --expect-threads "$threads" --require-distinct-hosts \
+    --require-hybrid-layout > "$log" 2>&1
+  grep -q '^RESULT: PASS$' "$log"
+  grep '^physical_core,' "$log" | sort > "$output_dir/cores-t${threads}.txt"
+  if [[ "$threads" != 1 ]]; then
+    cmp "$output_dir/cores-t1.txt" "$output_dir/cores-t${threads}.txt"
+  fi
+  echo "PASS $stage"
+done
+
+for round in A B; do
+  if [[ "$round" == A ]]; then thread_order=(1 2 4 8 16); modes=(ep dp)
+  else thread_order=(16 8 4 2 1); modes=(dp ep); fi
+  for threads in "${thread_order[@]}"; do
+    ranks=$((256 / threads))
+    per_socket=$((32 / threads))
+    export OMP_NUM_THREADS=$threads
+    for mode in "${modes[@]}"; do
+      stage="${round}-${mode}-p${ranks}-t${threads}"
+      log="$output_dir/${stage}.txt"
+      echo "Starting $stage"
+      timeout --signal=TERM --kill-after=15s 600s \
+        mpirun --map-by "ppr:${per_socket}:package:PE=${threads}" --rank-by slot \
+        --bind-to core --report-bindings -np "$ranks" \
+        ./build/moe_cpu_bench --parallelism "$mode" --communication alltoallv \
+        --router-mode trace --skew uniform --tokens 131072 --experts 256 \
+        --omp-schedule static > "$log" 2>&1
+      grep -q '^benchmark_expert_histogram=' "$log"
+      grep -q '^benchmark_rank_assignment_histogram=' "$log"
+      awk '/^benchmark,trial=/{n++; if ($0 !~ /,bitwise_ok=1$/) bad=1}
+           END {if (n != 5 || bad) exit 1}' "$log"
+      echo "PASS $stage"
+    done
+  done
+done
+stage=complete
+echo "All 5 affinity layouts and 20 EP/DP runs (100 trials) passed: $output_dir"
