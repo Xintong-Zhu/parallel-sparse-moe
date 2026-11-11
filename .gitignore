@@ -66,6 +66,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+__pycache__/
 
 # Generated experiment artifacts and private cluster records
 results/raw/*
