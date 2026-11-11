@@ -89,7 +89,7 @@ for round in A B; do
         stage="${round}-n${tokens}-${skew}-${communication}"
         log="$output_dir/${stage}.txt"
         echo "Starting $stage"
-        timeout --signal=TERM --kill-after=15s 600s \
+        timeout --signal=TERM --kill-after=15s 120s \
           mpirun --map-by ppr:2:node:PE=2 --bind-to core -np 8 \
           ./build/moe_cpu_bench --parallelism ep --communication "$communication" \
           --router-mode trace --skew "$skew" --hot-layout A --tokens "$tokens" \
