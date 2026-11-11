@@ -46,6 +46,8 @@ def analyze(directory, output):
     status = dict(line.split('=', 1) for line in (directory/'job_status.txt').read_text().splitlines())
     require(status == {'exit_status': '0', 'stage': 'complete'}, 'job did not complete')
     meta = dict(line.split('=', 1) for line in (directory/'metadata.txt').read_text().splitlines())
+    require(meta.get('diagnostic_mode') == '0',
+            'formal analysis requires recorded diagnostic_mode=0; debug logging affects timing')
     require(re.fullmatch('[0-9a-f]{40}', meta['git_commit']), 'invalid source commit')
     require(directory.name == 'placement-' + meta['pbs_jobid'].split('.')[0], 'job ID mismatch')
     expected_meta = dict(requested_cores='16', used_cores_p4='8', used_cores_p8='16',

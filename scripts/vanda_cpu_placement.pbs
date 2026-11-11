@@ -23,6 +23,8 @@ module load gompi/2024a
 module load CMake/3.29.3-GCCcore-13.3.0
 export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
 export OMP_NUM_THREADS=2 OMP_PLACES=cores OMP_PROC_BIND=close OMP_DYNAMIC=FALSE
+diagnostic_mode=0
+if [[ -n "${MOE_DEBUG_PHASES:-}" ]]; then diagnostic_mode=1; fi
 
 stage=source_verification
 cd "$MOE_SOURCE_DIR"
@@ -46,6 +48,7 @@ qstat -f "$PBS_JOBID" > "$output_dir/pbs_allocation.txt"
   printf 'router_mode=trace\nskew=uniform,moderate,extreme\nhot_layout=A,B\n'
   printf 'placement=rr,la\ncommunication=alltoallv,p2p\nomp_schedule=static\n'
   printf 'calibration_tokens=8192\nrounds=A,B\nwarmups=3\nrepeats_per_round=5\n'
+  printf 'diagnostic_mode=%s\n' "$diagnostic_mode"
   printf 'binding=ppr:1_or_2:node:PE=2,bind-to=core\n'
   printf 'timing_scope=precomputed_routes,EP_forward_including_dispatch_and_return\n'
 } > "$output_dir/metadata.txt"
@@ -70,7 +73,7 @@ for ranks in 4 8; do
   timeout --signal=TERM --kill-after=15s 120s \
     mpirun --map-by "$map_by" --bind-to core --report-bindings -np "$ranks" \
     ./build/moe_launch_probe --expect-threads 2 --require-distinct-hosts \
-    > "$output_dir/${stage}.txt" 2>&1
+    > "$output_dir/${stage}.txt" 2> "$output_dir/${stage}.stderr"
   grep -q '^RESULT: PASS$' "$output_dir/${stage}.txt"
   [[ $(grep -Ec '^  rank [0-9]+: host=' "$output_dir/${stage}.txt") -eq "$ranks" ]]
   for communication in alltoallv p2p; do
@@ -80,7 +83,7 @@ for ranks in 4 8; do
       ./build/moe_parallel_check --parallelism ep --placement la \
       --communication "$communication" --router-mode trace --skew moderate \
       --hot-layout A --tokens 2048 --experts 16 \
-      > "$output_dir/${stage}.txt" 2>&1
+      > "$output_dir/${stage}.txt" 2> "$output_dir/${stage}.stderr"
     grep -q 'CPU ep correctness: PASS' "$output_dir/${stage}.txt"
   done
 done
@@ -114,7 +117,7 @@ for round in A B; do
               ./build/moe_cpu_bench --parallelism ep --placement "$placement" \
               --communication "$communication" --router-mode trace --skew "$skew" \
               --hot-layout "$layout" --tokens "$tokens" --experts 16 \
-              --omp-schedule static > "$log" 2>&1
+              --omp-schedule static > "$log" 2> "$output_dir/${stage}.stderr"
             grep -q '^benchmark_expert_owners=' "$log"
             grep -q '^benchmark_expert_histogram=' "$log"
             grep -q '^benchmark_rank_assignment_histogram=' "$log"

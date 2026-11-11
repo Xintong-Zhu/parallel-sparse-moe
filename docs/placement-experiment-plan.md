@@ -70,3 +70,11 @@ python3 scripts/plot_cpu_placement.py results/processed/vanda-cpu-placement-<job
 The analyzer rejects failed or incomplete jobs, wrong configurations, mismatched
 RR/LA routes, invalid mappings, inconsistent predicted and realized loads, and
 any trial with `bitwise_ok != 1`. No failed point enters a plot.
+
+Measurement stdout is saved in each condition's `.txt` file; MPI launcher and
+phase-diagnostic stderr is saved in its `.stderr` file. They must not be merged:
+MPI can interleave stderr text into a stdout record, breaking strict parsing.
+The metadata records `diagnostic_mode`. Runs with `MOE_DEBUG_PHASES` enabled are
+for diagnosis only and are rejected by the formal analyzer because the phase
+logging happens inside the forward timer. Submit formal runs with that variable
+unset.
