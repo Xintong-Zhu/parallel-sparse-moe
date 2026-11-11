@@ -60,7 +60,8 @@ timeout --signal=TERM --kill-after=15s 120s \
 
 stage=build
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=OFF > "$output_dir/configure.log" 2>&1
-cmake --build build --target moe_cpu_bench moe_parallel_check moe_launch_probe moe_placement_tests -j 4 > "$output_dir/build.log" 2>&1
+cmake --build build --target moe_cpu_bench moe_parallel_check moe_launch_probe \
+  moe_placement_tests moe_protocol_tests moe_serial_tests -j 4 > "$output_dir/build.log" 2>&1
 ctest --test-dir build -R 'moe_placement_tests|moe_protocol_tests|moe_serial_tests' --output-on-failure > "$output_dir/unit_tests.txt" 2>&1
 
 for ranks in 4 8; do
