@@ -500,8 +500,8 @@ OMP_NUM_THREADS=1 mpirun -np 2 ./build/moe_parallel_check \
   --parallelism dp --router-mode trace --skew uniform --tokens 2048
 ```
 
-This checkpoint intentionally accepts only CPU, round-robin placement, and
-`N <= 8192`. EP can use `--communication alltoallv|p2p`; DP has no exchange and
+This correctness checker accepts CPU EP with `--placement rr|la` and
+`N <= 8192`. EP can use `--communication alltoallv|p2p`; DP uses RR, has no exchange, and
 uses the default `alltoallv` setting. The P2P variant exchanges counts, posts
 nonblocking receives and sends for the two payload arrays, then waits for all
 requests. Dispatch and return use distinct tags. EP now generates only the
@@ -512,9 +512,8 @@ benchmark. Do not use its runtime in scaling figures. Serial, DP, and EP now
 group assignments by Expert
 and call a shared micro-batch kernel (currently `MB=8`); the unit test compares
 it bitwise with the per-Token scalar kernel. In DP/EP, OpenMP distributes
-disjoint Expert micro-batch tasks across threads. A production benchmark,
-tuned task block size, and load-aware placement remain
-to be implemented. The current `moe_serial` `forward_seconds` includes
+disjoint Expert micro-batch tasks across threads. A tuned task block size
+remains to be implemented. The current `moe_serial` `forward_seconds` includes
 allocation and is only a functional
 diagnostic, not yet a formal benchmark result.
 
@@ -558,7 +557,16 @@ for analysis. The program prints `benchmark,trial=...` and the per-phase rank
 maxima. Phase maxima may come from different ranks and are not additive.
 Before timing, rank 0 also prints the exact configuration and seeds, the
 realized per-Expert assignment histogram, and the assignment totals per rank
-under round-robin placement. Retain these lines with the raw trials.
+under the selected placement. Retain these lines with the raw trials. For
+`--placement la`, rank 0 builds an independent 8,192-Token calibration sample
+from `calibration_seed`, counts Expert assignments, and maps the heaviest
+Experts to the currently least loaded MPI rank. The mapping is fixed for every
+timed forward. The program separately reports calibration/mapping time,
+predicted and realized rank loads, prediction error, and remote payload bytes.
+Calibration and mapping are outside the measured forward; include them if
+reporting full setup-to-output latency. Controlled traces prescribe exact
+Expert shares, so their calibration prediction is deliberately easier than a
+real workload with changing routes.
 
 The timed region includes per-forward temporary allocations, packing,
 communication, Expert computation, unpacking, and combining. Input/model/trace

@@ -12,6 +12,7 @@ add_library(moe_core STATIC
   src/config.cpp
   src/data.cpp
   src/expert.cpp
+  src/placement.cpp
   src/protocol.cpp
   src/router.cpp
   src/serial.cpp
@@ -64,6 +65,10 @@ if(BUILD_TESTING)
   add_executable(moe_serial_tests tests/serial_tests.cpp)
   target_link_libraries(moe_serial_tests PRIVATE moe_core)
   add_test(NAME moe_serial_tests COMMAND moe_serial_tests)
+
+  add_executable(moe_placement_tests tests/placement_tests.cpp)
+  target_link_libraries(moe_placement_tests PRIVATE moe_core)
+  add_test(NAME moe_placement_tests COMMAND moe_placement_tests)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
@@ -86,5 +91,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
   if(BUILD_TESTING)
     target_compile_options(moe_protocol_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(moe_serial_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(moe_placement_tests PRIVATE -Wall -Wextra -Wpedantic)
   endif()
 endif()

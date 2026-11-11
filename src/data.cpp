@@ -115,7 +115,7 @@ std::vector<double> trace_shares(const MoEConfig& config) {
 }  // namespace
 
 static Model generate_model_impl(const MoEConfig& config, int rank, int world_size,
-                                 bool partitioned) {
+                                 bool partitioned, const std::vector<int>* owners = nullptr) {
   const std::size_t d = config.dimension;
   const std::size_t h = config.hidden_dimension;
   const std::size_t e = config.experts;
@@ -132,7 +132,10 @@ static Model generate_model_impl(const MoEConfig& config, int rank, int world_si
 
   model.experts.resize(e);
   for (std::size_t expert = 0; expert < e; ++expert) {
-    if (partitioned && static_cast<int>(expert % static_cast<std::size_t>(world_size)) != rank) {
+    const int owner = owners == nullptr
+                          ? static_cast<int>(expert % static_cast<std::size_t>(world_size))
+                          : (*owners)[expert];
+    if (partitioned && owner != rank) {
       continue;
     }
     auto& weights = model.experts[expert];
@@ -162,6 +165,18 @@ Model generate_round_robin_partitioned_model(const MoEConfig& config, int rank,
     throw std::invalid_argument("invalid rank or world size for partitioned model");
   }
   return generate_model_impl(config, rank, world_size, true);
+}
+
+Model generate_partitioned_model(const MoEConfig& config, int rank,
+                                 int world_size, const std::vector<int>& owners) {
+  if (world_size <= 0 || rank < 0 || rank >= world_size ||
+      owners.size() != config.experts ||
+      std::any_of(owners.begin(), owners.end(), [world_size](int owner) {
+        return owner < 0 || owner >= world_size;
+      })) {
+    throw std::invalid_argument("invalid owner map for partitioned model");
+  }
+  return generate_model_impl(config, rank, world_size, true, &owners);
 }
 
 std::vector<float> generate_tokens(const MoEConfig& config, std::uint64_t first_token,

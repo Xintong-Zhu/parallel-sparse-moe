@@ -1,0 +1,130 @@
+#!/bin/bash
+#PBS -N moe_placement
+#PBS -j oe
+#PBS -l select=4:ncpus=4:mpiprocs=2:ompthreads=2:mem=16gb
+#PBS -l place=scatter
+#PBS -l walltime=01:00:00
+
+set -Eeo pipefail
+printf 'Batch shell started: job=%s host=%s\n' "${PBS_JOBID:-unset}" "$(hostname)"
+id
+: "${PBS_O_WORKDIR:?}"
+: "${PBS_JOBID:?}"
+: "${MOE_SOURCE_DIR:?Submit with the frozen-source wrapper}"
+cd "$PBS_O_WORKDIR"
+output_dir="$PWD/private/placement-${PBS_JOBID%%.*}"
+mkdir -p "$output_dir"
+exec > >(tee -a "$output_dir/job.log") 2>&1
+stage=environment
+trap 'rc=$?; printf "exit_status=%s\nstage=%s\n" "$rc" "$stage" > "$output_dir/job_status.txt"' EXIT
+trap 'echo "ERROR: stage=$stage line=$LINENO command=$BASH_COMMAND" >&2' ERR
+export PAGER=cat LMOD_PAGER=cat
+module load gompi/2024a
+module load CMake/3.29.3-GCCcore-13.3.0
+export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
+export OMP_NUM_THREADS=2 OMP_PLACES=cores OMP_PROC_BIND=close OMP_DYNAMIC=FALSE
+
+stage=source_verification
+cd "$MOE_SOURCE_DIR"
+read -r git_commit < .moe-source-commit
+[[ "$git_commit" =~ ^[0-9a-f]{40}$ ]]
+sha256sum --check --quiet .moe-source.sha256
+
+stage=allocation
+[[ -f "${PBS_NODEFILE:-}" ]]
+[[ $(wc -l < "$PBS_NODEFILE") -eq 8 ]]
+[[ $(sort -u "$PBS_NODEFILE" | wc -l) -eq 4 ]]
+cp "$PBS_NODEFILE" "$output_dir/pbs_nodefile.txt"
+sort -u "$PBS_NODEFILE" > "$output_dir/nodes.txt"
+id > "$output_dir/execution_identity.txt"
+module list > "$output_dir/modules.txt" 2>&1
+qstat -f "$PBS_JOBID" > "$output_dir/pbs_allocation.txt"
+{
+  printf 'git_commit=%s\npbs_jobid=%s\nsource_dir=%s\n' "$git_commit" "$PBS_JOBID" "$PWD"
+  printf 'requested_cores=16\nused_cores_p4=8\nused_cores_p8=16\nnode_count=4\nmpi_slots=8\nthreads=2\n'
+  printf 'tokens=32768,131072\nexperts=16\ndimension=128\nhidden=256\n'
+  printf 'router_mode=trace\nskew=uniform,moderate,extreme\nhot_layout=A,B\n'
+  printf 'placement=rr,la\ncommunication=alltoallv,p2p\nomp_schedule=static\n'
+  printf 'calibration_tokens=8192\nrounds=A,B\nwarmups=3\nrepeats_per_round=5\n'
+  printf 'binding=ppr:1_or_2:node:PE=2,bind-to=core\n'
+  printf 'timing_scope=precomputed_routes,EP_forward_including_dispatch_and_return\n'
+} > "$output_dir/metadata.txt"
+
+stage=node_models
+timeout --signal=TERM --kill-after=15s 120s \
+  mpirun --map-by ppr:1:node --bind-to none -np 4 bash ./scripts/vanda_node_model.sh \
+  2> "$output_dir/node_models.stderr" | sort > "$output_dir/node_models.csv"
+[[ $(wc -l < "$output_dir/node_models.csv") -eq 4 ]]
+[[ $(cut -d, -f1 "$output_dir/node_models.csv" | sort -u | wc -l) -eq 4 ]]
+[[ $(cut -d, -f2- "$output_dir/node_models.csv" | sort -u | wc -l) -eq 1 ]]
+
+stage=build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=OFF > "$output_dir/configure.log" 2>&1
+cmake --build build --target moe_cpu_bench moe_parallel_check moe_launch_probe moe_placement_tests -j 4 > "$output_dir/build.log" 2>&1
+ctest --test-dir build -R 'moe_placement_tests|moe_protocol_tests|moe_serial_tests' --output-on-failure > "$output_dir/unit_tests.txt" 2>&1
+
+for ranks in 4 8; do
+  if [[ "$ranks" == 4 ]]; then map_by=ppr:1:node:PE=2; else map_by=ppr:2:node:PE=2; fi
+  stage="launch-p${ranks}"
+  timeout --signal=TERM --kill-after=15s 120s \
+    mpirun --map-by "$map_by" --bind-to core --report-bindings -np "$ranks" \
+    ./build/moe_launch_probe --expect-threads 2 --require-distinct-hosts \
+    > "$output_dir/${stage}.txt" 2>&1
+  grep -q '^RESULT: PASS$' "$output_dir/${stage}.txt"
+  [[ $(grep -Ec '^  rank [0-9]+: host=' "$output_dir/${stage}.txt") -eq "$ranks" ]]
+  for communication in alltoallv p2p; do
+    stage="correctness-p${ranks}-${communication}-la"
+    timeout --signal=TERM --kill-after=15s 120s \
+      mpirun --map-by "$map_by" --bind-to core -np "$ranks" \
+      ./build/moe_parallel_check --parallelism ep --placement la \
+      --communication "$communication" --router-mode trace --skew moderate \
+      --hot-layout A --tokens 2048 --experts 16 \
+      > "$output_dir/${stage}.txt" 2>&1
+    grep -q 'CPU ep correctness: PASS' "$output_dir/${stage}.txt"
+  done
+done
+
+# The second round reverses each loop to expose order and node-drift effects.
+for round in A B; do
+  if [[ "$round" == A ]]; then
+    rank_order=(4 8); token_order=(32768 131072)
+    case_order=('uniform A' 'moderate A' 'moderate B' 'extreme A')
+    comm_order=(alltoallv p2p); placement_order=(rr la)
+  else
+    rank_order=(8 4); token_order=(131072 32768)
+    case_order=('extreme A' 'moderate B' 'moderate A' 'uniform A')
+    comm_order=(p2p alltoallv); placement_order=(la rr)
+  fi
+  for ranks in "${rank_order[@]}"; do
+    if [[ "$ranks" == 4 ]]; then map_by=ppr:1:node:PE=2; else map_by=ppr:2:node:PE=2; fi
+    for tokens in "${token_order[@]}"; do
+      [[ "$tokens" == 32768 || "$ranks" == 8 ]] || continue
+      for case_name in "${case_order[@]}"; do
+        read -r skew layout <<< "$case_name"
+        if [[ "$tokens" == 131072 && "$case_name" != 'moderate A' &&
+              "$case_name" != 'extreme A' ]]; then continue; fi
+        for communication in "${comm_order[@]}"; do
+          for placement in "${placement_order[@]}"; do
+            stage="${round}-p${ranks}-n${tokens}-${skew}-${layout}-${communication}-${placement}"
+            log="$output_dir/${stage}.txt"
+            echo "Starting $stage"
+            timeout --signal=TERM --kill-after=15s 120s \
+              mpirun --map-by "$map_by" --bind-to core -np "$ranks" \
+              ./build/moe_cpu_bench --parallelism ep --placement "$placement" \
+              --communication "$communication" --router-mode trace --skew "$skew" \
+              --hot-layout "$layout" --tokens "$tokens" --experts 16 \
+              --omp-schedule static > "$log" 2>&1
+            grep -q '^benchmark_expert_owners=' "$log"
+            grep -q '^benchmark_expert_histogram=' "$log"
+            grep -q '^benchmark_rank_assignment_histogram=' "$log"
+            awk '/^benchmark,trial=/{n++; if ($0 !~ /,bitwise_ok=1$/) bad=1}
+                 END {if (n != 5 || bad) exit 1}' "$log"
+            echo "PASS $stage"
+          done
+        done
+      done
+    done
+  done
+done
+stage=complete
+echo "All 80 placement comparisons (400 correct trials) passed: $output_dir"

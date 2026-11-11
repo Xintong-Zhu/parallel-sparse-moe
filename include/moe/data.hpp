@@ -29,6 +29,10 @@ Model generate_model(const MoEConfig& config);
 // receive weight arrays. Empty Expert entries must never be evaluated locally.
 Model generate_round_robin_partitioned_model(const MoEConfig& config, int rank,
                                               int world_size);
+// Expert weights are generated only on their selected owner; Router weights
+// remain replicated so every rank can route its local Tokens.
+Model generate_partitioned_model(const MoEConfig& config, int rank,
+                                 int world_size, const std::vector<int>& owners);
 std::vector<float> generate_tokens(const MoEConfig& config,
                                    std::uint64_t first_token,
                                    std::uint64_t token_count);

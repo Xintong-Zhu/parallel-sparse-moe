@@ -30,6 +30,7 @@ jobs:
           bash -n scripts/vanda_cpu_compare.pbs
           bash -n scripts/vanda_cpu_hybrid.pbs
           bash -n scripts/vanda_cpu_comm_skew.pbs
+          bash -n scripts/vanda_cpu_placement.pbs
           bash -n scripts/vanda_cpu_comm_diag.pbs
           bash -n scripts/submit_vanda_cpu_formal.sh
           bash -n scripts/vanda_node_model.sh
@@ -55,6 +56,9 @@ jobs:
           grep -qx 'benchmark_rank_assignment_histogram=18,16' dp_uneven.log
           test "$(grep -c ',bitwise_ok=1$' dp_uneven.log)" -eq 5
           OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --communication p2p --router-mode trace --skew extreme --hot-layout A --tokens 2048 --experts 16
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --placement la --communication alltoallv --router-mode trace --skew moderate --hot-layout A --tokens 257 --dim 4 --hidden 8 --experts 16
+          OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --placement la --communication p2p --router-mode trace --skew extreme --tokens 257 --dim 4 --hidden 8 --experts 16
+          OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:4 -np 4 ./build/moe_parallel_check --parallelism ep --placement la --communication p2p --router-mode router --tokens 17 --dim 4 --hidden 8 --experts 16
           OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_mpi_loopback --router-mode trace --skew uniform --tokens 2048
           OMP_NUM_THREADS=1 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048
           OMP_NUM_THREADS=2 mpirun --map-by slot:OVERSUBSCRIBE --bind-to none --host localhost:2 -np 2 ./build/moe_parallel_check --parallelism ep --router-mode trace --skew uniform --tokens 2048 --omp-schedule dynamic

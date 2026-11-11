@@ -12,7 +12,7 @@ fi
 command -v qsub >/dev/null
 job_script=${1:-scripts/vanda_cpu_formal.pbs}
 case "$job_script" in
-  scripts/vanda_cpu_formal.pbs|scripts/vanda_cpu_compare.pbs|scripts/vanda_cpu_hybrid.pbs|scripts/vanda_cpu_comm_skew.pbs|scripts/vanda_cpu_comm_diag.pbs) ;;
+  scripts/vanda_cpu_formal.pbs|scripts/vanda_cpu_compare.pbs|scripts/vanda_cpu_hybrid.pbs|scripts/vanda_cpu_comm_skew.pbs|scripts/vanda_cpu_comm_diag.pbs|scripts/vanda_cpu_placement.pbs) ;;
   *) echo 'Choose a supported CPU PBS script.' >&2; exit 2 ;;
 esac
 mkdir -p "$repo/private"

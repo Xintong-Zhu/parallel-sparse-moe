@@ -1,6 +1,7 @@
 #include "moe/config.hpp"
 #include "moe/data.hpp"
 #include "moe/expert.hpp"
+#include "moe/placement.hpp"
 #include "moe/protocol.hpp"
 #include "moe/router.hpp"
 #include "moe/serial.hpp"
@@ -36,6 +37,52 @@ struct PhaseTiming {
   double validation_unpack = 0.0;
   double combine = 0.0;
 };
+
+struct PlacementSetup {
+  std::vector<int> owners;
+  std::vector<std::uint64_t> calibration_histogram;
+  double calibration_seconds = 0.0;
+  double mapping_seconds = 0.0;
+};
+
+constexpr std::uint64_t calibration_tokens = 8192;
+
+PlacementSetup prepare_placement(const moe::MoEConfig& config, int rank, int world) {
+  PlacementSetup setup;
+  if (config.placement == moe::Placement::kRoundRobin) {
+    setup.owners = moe::round_robin_placement(config.experts, world);
+    return setup;
+  }
+  setup.owners.resize(config.experts);
+  if (rank == 0) {
+    auto calibration = config;
+    calibration.tokens = calibration_tokens;
+    calibration.input_seed = config.calibration_seed;
+    calibration.routing_seed = config.calibration_seed;
+    const double calibration_start = MPI_Wtime();
+    if (config.router_mode == moe::RouterMode::kTrace) {
+      setup.calibration_histogram = moe::routing_histogram(
+          moe::generate_controlled_trace(calibration), config.experts);
+    } else {
+      const auto model = moe::generate_model(calibration);
+      const auto tokens = moe::generate_tokens(calibration, 0, calibration_tokens);
+      setup.calibration_histogram.assign(config.experts, 0);
+      for (std::uint64_t token = 0; token < calibration_tokens; ++token) {
+        const auto route = moe::route_token(
+            model, calibration, tokens.data() + token * config.dimension);
+        for (const auto expert : route.expert_ids) {
+          ++setup.calibration_histogram[expert];
+        }
+      }
+    }
+    setup.calibration_seconds = MPI_Wtime() - calibration_start;
+    const double mapping_start = MPI_Wtime();
+    setup.owners = moe::load_aware_placement(setup.calibration_histogram, world);
+    setup.mapping_seconds = MPI_Wtime() - mapping_start;
+  }
+  MPI_Bcast(setup.owners.data(), static_cast<int>(config.experts), MPI_INT, 0, MPI_COMM_WORLD);
+  return setup;
+}
 
 struct ExpertTask {
   std::uint32_t expert;
@@ -245,6 +292,7 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
                               const std::vector<float>& tokens,
                               const std::vector<moe::RoutingDecision>& routes,
                               moe::TokenRange range, int rank, int world,
+                              const std::vector<int>& owners,
                               PhaseTiming* timing = nullptr,
                               bool collective_checks = true) {
   const bool diagnostic = std::getenv("MOE_DEBUG_PHASES") != nullptr;
@@ -258,7 +306,7 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
     const float* token = tokens.data() + local * config.dimension;
     for (std::uint8_t slot = 0; slot < 2; ++slot) {
       const auto expert = routes[local].expert_ids[slot];
-      const int owner = moe::round_robin_expert_owner(expert, world);
+      const int owner = owners[expert];
       const auto wire = moe::pack_header(
           {range.begin + local, static_cast<std::uint32_t>(rank), expert, slot});
       append(dispatch[owner], wire, token, config.dimension);
@@ -276,7 +324,7 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
   int valid = moe::valid_assignment_buffer(received, config, world, &error) ? 1 : 0;
   if (valid) {
     for (const auto& wire : received.headers) {
-      if (moe::round_robin_expert_owner(moe::unpack_header(wire).expert_id, world) != rank) {
+      if (owners[moe::unpack_header(wire).expert_id] != rank) {
         valid = 0;
         break;
       }
@@ -396,13 +444,15 @@ int run(int argc, char** argv) {
   if (valid) {
     const auto& c = parsed.config;
     valid = c.expert_backend == moe::ExpertBackend::kCpu &&
-            c.placement == moe::Placement::kRoundRobin && c.tokens <= 8192 &&
+            c.tokens <= 8192 &&
+            (c.parallelism == moe::Parallelism::kExpertParallel ||
+             c.placement == moe::Placement::kRoundRobin) &&
             (c.parallelism == moe::Parallelism::kExpertParallel ||
              c.communication == moe::Communication::kAlltoallv);
   }
   MPI_Allreduce(MPI_IN_PLACE, &valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
   if (!valid) {
-    if (rank == 0) std::cerr << "Use valid CPU options, RR placement, N<=8192; "
+    if (rank == 0) std::cerr << "Use valid CPU options, EP placement or DP/RR, N<=8192; "
                                "this program checks correctness, not performance.\n";
     MPI_Finalize();
     return 2;
@@ -412,9 +462,11 @@ int run(int argc, char** argv) {
     omp_set_schedule(config.omp_schedule == moe::OpenMPSchedule::kStatic
                          ? omp_sched_static : omp_sched_dynamic, 1);
     const double setup_start = MPI_Wtime();
+    const auto placement = prepare_placement(config, rank, world);
     const auto range = moe::contiguous_token_range(config.tokens, rank, world);
     const auto model = config.parallelism == moe::Parallelism::kExpertParallel
-                           ? moe::generate_round_robin_partitioned_model(config, rank, world)
+                           ? moe::generate_partitioned_model(config, rank, world,
+                                                             placement.owners)
                            : moe::generate_model(config);
     const auto tokens = moe::generate_tokens(config, range.begin, range.count);
     const auto trace = config.router_mode == moe::RouterMode::kTrace
@@ -426,7 +478,8 @@ int run(int argc, char** argv) {
     const double forward_start = MPI_Wtime();
     const auto output = config.parallelism == moe::Parallelism::kDataParallel
                             ? forward_dp(config, model, tokens, routes)
-                            : forward_ep(config, model, tokens, routes, range, rank, world);
+                            : forward_ep(config, model, tokens, routes, range, rank, world,
+                                         placement.owners);
     const double forward_seconds = MPI_Wtime() - forward_start;
     double setup_max = 0.0, forward_max = 0.0;
     MPI_Reduce(&setup_seconds, &setup_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
@@ -457,6 +510,11 @@ int run(int argc, char** argv) {
                 << ", communication=" << moe::to_string(config.communication) << ")\n";
       std::cout << "diagnostic_setup_seconds_max=" << setup_max << '\n'
                 << "diagnostic_forward_seconds_max=" << forward_max << '\n';
+      if (config.placement == moe::Placement::kLoadAware) {
+        std::cout << "diagnostic_calibration_seconds=" << placement.calibration_seconds
+                  << '\n' << "diagnostic_mapping_seconds=" << placement.mapping_seconds
+                  << '\n';
+      }
     }
     MPI_Finalize();
     return passed ? 0 : 1;
@@ -483,14 +541,15 @@ int run_measurement(int argc, char** argv) {
   if (valid) {
     const auto& c = parsed.config;
     valid = c.expert_backend == moe::ExpertBackend::kCpu &&
-            c.placement == moe::Placement::kRoundRobin &&
+            (c.parallelism == moe::Parallelism::kExpertParallel ||
+             c.placement == moe::Placement::kRoundRobin) &&
             (c.parallelism == moe::Parallelism::kExpertParallel ||
              c.communication == moe::Communication::kAlltoallv);
   }
   MPI_Allreduce(MPI_IN_PLACE, &valid, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
   if (!valid) {
     if (rank == 0) {
-      std::cerr << "Use valid CPU options and RR placement for the CPU measurement.\n";
+      std::cerr << "Use valid CPU EP placement or DP/RR for the CPU measurement.\n";
     }
     MPI_Finalize();
     return 2;
@@ -499,9 +558,11 @@ int run_measurement(int argc, char** argv) {
     const auto& config = parsed.config;
     omp_set_schedule(config.omp_schedule == moe::OpenMPSchedule::kStatic
                          ? omp_sched_static : omp_sched_dynamic, 1);
+    const auto placement = prepare_placement(config, rank, world);
     const auto range = moe::contiguous_token_range(config.tokens, rank, world);
     const auto model = config.parallelism == moe::Parallelism::kExpertParallel
-                           ? moe::generate_round_robin_partitioned_model(config, rank, world)
+                           ? moe::generate_partitioned_model(config, rank, world,
+                                                             placement.owners)
                            : moe::generate_model(config);
     const auto tokens = moe::generate_tokens(config, range.begin, range.count);
     const auto trace = config.router_mode == moe::RouterMode::kTrace
@@ -534,9 +595,7 @@ int run_measurement(int argc, char** argv) {
               config.tokens, peer, world).count;
         }
       } else {
-        for (std::size_t expert = 0; expert < histogram.size(); ++expert) {
-          owner_counts[expert % static_cast<std::size_t>(world)] += histogram[expert];
-        }
+        owner_counts = moe::rank_assignment_loads(histogram, placement.owners, world);
       }
       const char* label = benchmark ? "benchmark" : "pilot";
       std::cout << label << "_config,tokens=" << config.tokens
@@ -549,12 +608,48 @@ int run_measurement(int argc, char** argv) {
                 << ",communication=" << moe::to_string(config.communication)
                 << ",router_mode=" << moe::to_string(config.router_mode)
                 << ",skew=" << moe::to_string(config.skew)
+                << ",hot_layout=" << moe::to_string(config.hot_layout)
                 << ",placement=" << moe::to_string(config.placement)
                 << ",omp_schedule=" << moe::to_string(config.omp_schedule)
                 << ",model_seed=" << config.model_seed
                 << ",input_seed=" << config.input_seed
                 << ",routing_seed=" << config.routing_seed
                 << ",calibration_seed=" << config.calibration_seed << '\n';
+      std::cout << label << "_expert_owners=";
+      for (std::size_t expert = 0; expert < placement.owners.size(); ++expert) {
+        std::cout << (expert == 0 ? "" : ",") << placement.owners[expert];
+      }
+      std::cout << '\n' << label << "_calibration_seconds="
+                << placement.calibration_seconds << '\n'
+                << label << "_mapping_seconds=" << placement.mapping_seconds << '\n';
+      if (config.placement == moe::Placement::kLoadAware) {
+        std::cout << label << "_calibration_tokens=" << calibration_tokens << '\n'
+                  << label << "_calibration_expert_histogram=";
+        for (std::size_t expert = 0; expert < placement.calibration_histogram.size(); ++expert) {
+          std::cout << (expert == 0 ? "" : ",")
+                    << placement.calibration_histogram[expert];
+        }
+        std::cout << '\n';
+        const auto predicted = moe::rank_assignment_loads(
+            placement.calibration_histogram, placement.owners, world);
+        std::cout << label << "_predicted_rank_assignment_histogram=";
+        double max_error_pp = 0.0;
+        for (int peer = 0; peer < world; ++peer) {
+          const auto index = static_cast<std::size_t>(peer);
+          const double scaled = static_cast<double>(predicted[index]) *
+                                static_cast<double>(config.tokens) /
+                                static_cast<double>(calibration_tokens);
+          std::cout << (peer == 0 ? "" : ",")
+                    << static_cast<std::uint64_t>(std::llround(scaled));
+          const double predicted_share = static_cast<double>(predicted[index]) /
+                                         static_cast<double>(2 * calibration_tokens);
+          const double actual_share = static_cast<double>(owner_counts[index]) /
+                                      static_cast<double>(2 * config.tokens);
+          max_error_pp = std::max(max_error_pp,
+                                  100.0 * std::abs(predicted_share - actual_share));
+        }
+        std::cout << '\n' << label << "_max_prediction_error_pp=" << max_error_pp << '\n';
+      }
       std::cout << label << "_expert_histogram=";
       for (std::size_t expert = 0; expert < histogram.size(); ++expert) {
         std::cout << (expert == 0 ? "" : ",") << histogram[expert];
@@ -564,6 +659,27 @@ int run_measurement(int argc, char** argv) {
         std::cout << (peer == 0 ? "" : ",") << owner_counts[peer];
       }
       std::cout << '\n';
+      if (config.parallelism == moe::Parallelism::kExpertParallel) {
+        std::uint64_t remote = 0;
+        for (int peer = 0; peer < world; ++peer) {
+          const auto peer_range = moe::contiguous_token_range(config.tokens, peer, world);
+          for (std::uint64_t token = peer_range.begin;
+               token < peer_range.begin + peer_range.count; ++token) {
+            for (const auto expert : reference.routes[token].expert_ids) {
+              remote += placement.owners[expert] != peer;
+            }
+          }
+        }
+        const auto max_load = *std::max_element(owner_counts.begin(), owner_counts.end());
+        const double mean_load = static_cast<double>(2 * config.tokens) / world;
+        const std::uint64_t payload_bytes = 2 * remote *
+            (sizeof(moe::WireAssignmentHeader) +
+             static_cast<std::uint64_t>(config.dimension) * sizeof(float));
+        std::cout << label << "_rank_load_max_over_mean=" << max_load / mean_load
+                  << '\n' << label << "_remote_assignment_ratio="
+                  << static_cast<double>(remote) / (2 * config.tokens)
+                  << '\n' << label << "_remote_payload_bytes=" << payload_bytes << '\n';
+      }
       counts.resize(world);
       offsets.resize(world);
       for (int peer = 0; peer < world; ++peer) {
@@ -585,7 +701,7 @@ int run_measurement(int argc, char** argv) {
       return config.parallelism == moe::Parallelism::kDataParallel
                  ? forward_dp(config, model, tokens, routes, timing)
                  : forward_ep(config, model, tokens, routes, range, rank, world,
-                              timing, !benchmark);
+                              placement.owners, timing, !benchmark);
     };
     auto check_output = [&](const std::vector<float>& output) {
       int local_ok = output.size() == expected.size();
