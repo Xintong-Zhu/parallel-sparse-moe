@@ -30,6 +30,7 @@ jobs:
           bash -n scripts/vanda_cpu_compare.pbs
           bash -n scripts/vanda_cpu_hybrid.pbs
           bash -n scripts/vanda_cpu_comm_skew.pbs
+          bash -n scripts/vanda_cpu_comm_diag.pbs
           bash -n scripts/submit_vanda_cpu_formal.sh
           bash -n scripts/vanda_node_model.sh
           bash -n scripts/vanda_node_topology.sh

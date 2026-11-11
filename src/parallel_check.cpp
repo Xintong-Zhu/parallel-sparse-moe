@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <iostream>
@@ -246,6 +247,11 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
                               moe::TokenRange range, int rank, int world,
                               PhaseTiming* timing = nullptr,
                               bool collective_checks = true) {
+  const bool diagnostic = std::getenv("MOE_DEBUG_PHASES") != nullptr;
+  auto checkpoint = [&](const char* label) {
+    if (diagnostic) std::cerr << "diagnostic,rank=" << rank << ",stage=" << label << std::endl;
+  };
+  checkpoint("forward_start");
   const double dispatch_pack_start = MPI_Wtime();
   Buffers dispatch(world);
   for (std::size_t local = 0; local < routes.size(); ++local) {
@@ -260,8 +266,10 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
   }
   if (timing != nullptr) timing->dispatch_pack = MPI_Wtime() - dispatch_pack_start;
   const double dispatch_comm_start = MPI_Wtime();
+  checkpoint("dispatch_exchange_start");
   const auto received = exchange(dispatch, config.dimension, config.communication,
                                  1000, MPI_COMM_WORLD);
+  checkpoint("dispatch_exchange_done");
   if (timing != nullptr) timing->dispatch_comm = MPI_Wtime() - dispatch_comm_start;
   const double dispatch_check_start = MPI_Wtime();
   std::string error;
@@ -316,6 +324,7 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
     }
   }
   if (timing != nullptr) timing->compute = MPI_Wtime() - compute_start;
+  checkpoint("expert_compute_done");
   const double return_pack_start = MPI_Wtime();
   for (std::size_t i = 0; i < received.headers.size(); ++i) {
     const auto header = moe::unpack_header(received.headers[i]);
@@ -325,8 +334,10 @@ std::vector<float> forward_ep(const moe::MoEConfig& config, const moe::Model& mo
   }
   if (timing != nullptr) timing->return_pack = MPI_Wtime() - return_pack_start;
   const double return_comm_start = MPI_Wtime();
+  checkpoint("return_exchange_start");
   const auto returned = exchange(returns, config.dimension, config.communication,
                                  1100, MPI_COMM_WORLD);
+  checkpoint("return_exchange_done");
   if (timing != nullptr) timing->return_comm = MPI_Wtime() - return_comm_start;
   const double return_unpack_start = MPI_Wtime();
   const std::size_t expected = routes.size() * 2U;
@@ -502,6 +513,7 @@ int run_measurement(int argc, char** argv) {
     std::vector<float> reference_output;
     std::vector<int> counts, offsets;
     if (rank == 0) {
+      if (std::getenv("MOE_DEBUG_PHASES")) std::cerr << "diagnostic,stage=oracle_start" << std::endl;
       const auto global_tokens = moe::generate_tokens(config, 0, config.tokens);
       const auto* reference_trace =
           config.router_mode == moe::RouterMode::kTrace ? &trace : nullptr;
@@ -511,6 +523,7 @@ int run_measurement(int argc, char** argv) {
                                  : moe::forward_serial(config, model, global_tokens,
                                                        reference_trace);
       reference_output = reference.output;
+      if (std::getenv("MOE_DEBUG_PHASES")) std::cerr << "diagnostic,stage=oracle_done" << std::endl;
       const auto histogram = moe::routing_histogram(reference.routes, config.experts);
       std::vector<std::uint64_t> owner_counts(static_cast<std::size_t>(world), 0);
       if (config.parallelism == moe::Parallelism::kDataParallel) {
@@ -589,6 +602,8 @@ int run_measurement(int argc, char** argv) {
     constexpr int warmups = 3;
     constexpr int repeats = 5;
     for (int i = 0; i < warmups; ++i) {
+      if (rank == 0 && std::getenv("MOE_DEBUG_PHASES"))
+        std::cerr << "diagnostic,stage=warmup_start,index=" << i << std::endl;
       if (!check_output(forward(nullptr))) {
         if (rank == 0) std::cerr << "CPU warmup correctness: FAIL\n";
         MPI_Finalize();
@@ -596,6 +611,8 @@ int run_measurement(int argc, char** argv) {
       }
     }
     for (int trial = 0; trial < repeats; ++trial) {
+      if (rank == 0 && std::getenv("MOE_DEBUG_PHASES"))
+        std::cerr << "diagnostic,stage=trial_start,index=" << trial << std::endl;
       MPI_Barrier(MPI_COMM_WORLD);
       const double start = MPI_Wtime();
       PhaseTiming phases;

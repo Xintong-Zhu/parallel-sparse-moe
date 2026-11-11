@@ -1,0 +1,62 @@
+#!/bin/bash
+#PBS -N moe_comm_diag
+#PBS -j oe
+#PBS -l select=4:ncpus=4:mpiprocs=2:ompthreads=2:mem=16gb
+#PBS -l place=scatter
+#PBS -l walltime=00:20:00
+
+set -Eeo pipefail
+: "${PBS_O_WORKDIR:?}"
+: "${PBS_JOBID:?}"
+: "${MOE_SOURCE_DIR:?Use the frozen-source wrapper}"
+cd "$PBS_O_WORKDIR"
+output_dir="$PWD/private/comm-diag-${PBS_JOBID%%.*}"
+mkdir -p "$output_dir"
+exec > >(tee -a "$output_dir/job.log") 2>&1
+stage=environment
+trap 'rc=$?; printf "exit_status=%s\nstage=%s\n" "$rc" "$stage" > "$output_dir/job_status.txt"' EXIT
+trap 'echo "ERROR: stage=$stage line=$LINENO command=$BASH_COMMAND" >&2' ERR
+export PAGER=cat LMOD_PAGER=cat
+module load gompi/2024a
+module load CMake/3.29.3-GCCcore-13.3.0
+export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
+export OMP_NUM_THREADS=2 OMP_PLACES=cores OMP_PROC_BIND=close OMP_DYNAMIC=FALSE
+export MOE_DEBUG_PHASES=1
+stage=source_verification
+cd "$MOE_SOURCE_DIR"
+read -r git_commit < .moe-source-commit
+[[ "$git_commit" =~ ^[0-9a-f]{40}$ ]]
+sha256sum --check --quiet .moe-source.sha256
+stage=allocation
+[[ -f "${PBS_NODEFILE:-}" ]]
+[[ $(wc -l < "$PBS_NODEFILE") -eq 8 ]]
+[[ $(sort -u "$PBS_NODEFILE" | wc -l) -eq 4 ]]
+cp "$PBS_NODEFILE" "$output_dir/pbs_nodefile.txt"
+qstat -f "$PBS_JOBID" > "$output_dir/pbs_allocation.txt"
+printf 'git_commit=%s\npbs_jobid=%s\n' "$git_commit" "$PBS_JOBID" > "$output_dir/metadata.txt"
+stage=build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=OFF > "$output_dir/configure.log" 2>&1
+cmake --build build --target moe_cpu_bench -j 4 > "$output_dir/build.log" 2>&1
+printf 'tokens,communication,exit_code,passing_trials\n' > "$output_dir/matrix.csv"
+# Continue after a timed-out case to distinguish size-dependent and backend-specific stalls.
+for tokens in 8192 32768; do
+  for communication in p2p alltoallv; do
+    stage="n${tokens}-${communication}"
+    log="$output_dir/${stage}.txt"
+    echo "Starting diagnostic $stage"
+    if timeout --signal=TERM --kill-after=15s 120s \
+      mpirun --map-by ppr:2:node:PE=2 --bind-to core -np 8 \
+      ./build/moe_cpu_bench --parallelism ep --communication "$communication" \
+      --router-mode trace --skew uniform --tokens "$tokens" --experts 16 \
+      --omp-schedule static > "$log" 2>&1; then
+      result=0
+    else
+      result=$?
+    fi
+    passing=$(grep -c '^benchmark,trial=.*bitwise_ok=1$' "$log" || true)
+    printf '%s,%s,%s,%s\n' "$tokens" "$communication" "$result" "$passing" >> "$output_dir/matrix.csv"
+    echo "Diagnostic $stage: exit=$result passing_trials=$passing"
+  done
+done
+stage=complete
+echo "Diagnostic matrix collected in $output_dir/matrix.csv"
