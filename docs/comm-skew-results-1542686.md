@@ -55,8 +55,8 @@ and passed all four diagnostic size/method cases. Job 1542686 completed all
 conditions. The earlier stall was not reproduced; its cause remains unknown.
 The failed run contributes no performance data to the table or plots.
 
-The benchmark still supports RR placement only. Load-aware placement has not
-been implemented or measured; report it as outstanding work, not as a result.
+This job uses RR placement only. A separate validated RR/LA comparison is
+reported in `docs/placement-results-1543859.md`.
 
 Recreate the validated summary and figures:
 

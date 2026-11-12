@@ -8,10 +8,11 @@ Parallel (DP) implementation provides a communication-free reference.
 A CUDA Expert-FFN backend is an additional, separately reported extension; its
 staged integration plan is in [docs/gpu-integration-plan.md](docs/gpu-integration-plan.md).
 
-> **Project status:** design and implementation, protocol version 0.2.
-> This README is the team's frozen experimental contract and supersedes the
-> earlier pilot parameters and routing definitions in version 0.1. Calibration
-> choices may change only before the formal experiment matrix is frozen.
+> **Project status:** the core CPU experiment matrix and one-GPU test are
+> complete. The [experiment inventory](docs/experiment-status.md) links each
+> validated result, dataset and figure. This README remains the experimental
+> contract (protocol version 0.2); the final report and submission review are
+> still in progress.
 
 ## Scope and research questions
 

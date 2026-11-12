@@ -87,5 +87,5 @@ python3 scripts/plot_cpu_hybrid.py results/processed/vanda-cpu-hybrid-1539813.cs
 ```
 
 The CSV retains both rounds, timing ranges, phase medians, baseline gains,
-drift flags and provenance. PNG/PDF figures are generated under `figures/`.
+drift flags and provenance. PNG/PDF figures are tracked under `figures/`.
 Raw cluster logs remain under ignored `private/hybrid-cpu-1539813/`.

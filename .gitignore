@@ -77,6 +77,8 @@ results/processed/*
 !results/processed/*.csv
 figures/*
 !figures/.gitkeep
+!figures/*.png
+!figures/*.pdf
 private/
 .env
 .env.*

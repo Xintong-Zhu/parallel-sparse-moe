@@ -71,5 +71,5 @@ python3 scripts/analyze_cpu_compare.py private/compare-cpu-1539728 \
 python3 scripts/plot_cpu_compare.py results/processed/vanda-cpu-compare-1539728.csv
 ```
 
-The plot is produced as PNG and vector PDF under the ignored `figures/`
+The plot is produced as PNG and vector PDF under the tracked `figures/`
 directory. Raw logs stay in ignored `private/compare-cpu-1539728/`.
