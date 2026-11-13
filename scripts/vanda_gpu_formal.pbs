@@ -1,0 +1,89 @@
+#!/bin/bash
+#PBS -N moe_gpu_formal
+#PBS -j oe
+#PBS -l select=1:ncpus=4:ngpus=1:mpiprocs=1:mem=32gb
+#PBS -l walltime=00:45:00
+
+set -Eeo pipefail
+: "${PBS_O_WORKDIR:?}"
+: "${PBS_JOBID:?}"
+: "${MOE_SOURCE_DIR:?Submit with scripts/submit_vanda_gpu_formal.sh}"
+cd "$PBS_O_WORKDIR"
+output_dir="$PWD/private/gpu-formal-${PBS_JOBID%%.*}"
+mkdir -p "$output_dir"
+exec > >(tee -a "$output_dir/job.log") 2>&1
+stage=environment
+trap 'rc=$?; printf "exit_status=%s\nstage=%s\n" "$rc" "$stage" > "$output_dir/job_status.txt"' EXIT
+trap 'echo "ERROR: stage=$stage line=$LINENO command=$BASH_COMMAND" >&2' ERR
+export PAGER=cat LMOD_PAGER=cat
+module load gompi/2024a
+module load CMake/3.29.3-GCCcore-13.3.0
+module load cuda12.4/toolkit/12.4.1
+export OMP_NUM_THREADS=1 OMP_PLACES=cores OMP_PROC_BIND=close OMP_DYNAMIC=FALSE
+
+stage=source_verification
+cd "$MOE_SOURCE_DIR"
+read -r git_commit < .moe-source-commit
+[[ "$git_commit" =~ ^[0-9a-f]{40}$ ]]
+sha256sum --check --quiet .moe-source.sha256
+
+stage=allocation
+[[ -f "${PBS_NODEFILE:-}" ]]
+[[ $(sort -u "$PBS_NODEFILE" | wc -l) -eq 1 ]]
+cp "$PBS_NODEFILE" "$output_dir/pbs_nodefile.txt"
+hostname > "$output_dir/nodes.txt"
+id > "$output_dir/execution_identity.txt"
+module list > "$output_dir/modules.txt" 2>&1
+qstat -f "$PBS_JOBID" > "$output_dir/pbs_allocation.txt"
+nvidia-smi -L > "$output_dir/gpu_device.txt"
+nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader > "$output_dir/gpu_info.csv"
+lscpu | grep -E 'Model name|Socket|Core|Thread|NUMA|CPU\(s\)' > "$output_dir/cpu_info.txt"
+nvcc --version > "$output_dir/nvcc_version.txt"
+{
+  printf 'git_commit=%s\npbs_jobid=%s\nsource_dir=%s\n' "$git_commit" "$PBS_JOBID" "$PWD"
+  printf 'cuda_visible_devices=%s\n' "${CUDA_VISIBLE_DEVICES:-unset}"
+  printf 'node_count=1\ngpus=1\nprocesses=1\nthreads=1\n'
+  printf 'tokens=2048,8192,32768\nexperts=16\ndimension=128\nhidden=256\ntopk=2\n'
+  printf 'router_mode=trace\ncases=uniform-A,moderate-A,moderate-B,extreme-A\n'
+  printf 'model_seed=42\ninput_seed=314159\nrouting_seed=271828\ncalibration_seed=161803\n'
+  printf 'rounds=A,B\nwarmups=3\nrepeats=5\n'
+  printf 'timing_scope=GPU_forward_excludes_weight_upload_and_setup;CPU_serial_separate\n'
+} > "$output_dir/metadata.txt"
+
+stage=build
+cmake -S . -B build-gpu -DCMAKE_BUILD_TYPE=Release -DMOE_ENABLE_CUDA=ON \
+  > "$output_dir/configure.log" 2>&1
+cmake --build build-gpu --target moe_gpu -j 4 > "$output_dir/build.log" 2>&1
+
+for round in A B; do
+  if [[ "$round" == A ]]; then
+    token_order=(2048 8192 32768)
+    case_order=(uniform-A moderate-A moderate-B extreme-A)
+  else
+    token_order=(32768 8192 2048)
+    case_order=(extreme-A moderate-B moderate-A uniform-A)
+  fi
+  for tokens in "${token_order[@]}"; do
+    for case_name in "${case_order[@]}"; do
+      skew=${case_name%-*}
+      layout=${case_name#*-}
+      stage="${round}-n${tokens}-${case_name}"
+      log="$output_dir/${stage}.txt"
+      echo "Starting $stage"
+      timeout --signal=TERM --kill-after=15s 180s \
+        ./build-gpu/moe_gpu --backend cuda --router-mode trace \
+        --skew "$skew" --hot-layout "$layout" --tokens "$tokens" \
+        --experts 16 --dim 128 --hidden 256 --topk 2 \
+        --model-seed 42 --input-seed 314159 --routing-seed 271828 \
+        --calibration-seed 161803 > "$log" 2> "$output_dir/${stage}.stderr"
+      [[ $(grep -c '^gpu_trial=' "$log") -eq 5 ]]
+      [[ $(grep -c '^cpu_trial=' "$log") -eq 5 ]]
+      [[ $(grep -c 'correctness=PASS$' "$log") -eq 10 ]]
+      grep -Eq '^gpu_device=.*A40,visible_devices=1,' "$log"
+      grep -q '^GPU correctness: PASS$' "$log"
+      echo "PASS $stage"
+    done
+  done
+done
+stage=complete
+echo "All 24 GPU conditions and 240 measured trials passed: $output_dir"
