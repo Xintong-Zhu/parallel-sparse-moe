@@ -7,8 +7,7 @@ OpenMP threading, and an optional single-GPU CUDA Expert FFN.
 Each Token selects two Experts. DP replicates all Expert weights and partitions
 Tokens; EP partitions Expert weights and exchanges Token assignments and results.
 Inputs, weights and controlled routes are generated deterministically: no external
-model or dataset download is required. This project studies a single synthetic
-MoE layer, not a complete language model or training pipeline.
+model or dataset download is required. 
 
 We study how parallel execution speeds up MoE inference and how communication
 and uneven Expert workloads limit its performance. We compare CPU parallel
